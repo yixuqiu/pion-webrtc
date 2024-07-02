@@ -55,9 +55,10 @@ type PeerConnection struct {
 
 	idpLoginURL *string
 
-	isClosed               *atomicBool
-	isNegotiationNeeded    *atomicBool
-	negotiationNeededState negotiationNeededState
+	isClosed                                *atomicBool
+	isClosedDone                            chan struct{}
+	isNegotiationNeeded                     *atomicBool
+	updateNegotiationNeededFlagOnEmptyChain *atomicBool
 
 	lastOffer  string
 	lastAnswer string
@@ -104,6 +105,7 @@ func (api *API) NewPeerConnection(configuration Configuration) (*PeerConnection,
 	// https://w3c.github.io/webrtc-pc/#constructor (Step #2)
 	// Some variables defined explicitly despite their implicit zero values to
 	// allow better readability to understand what is happening.
+
 	pc := &PeerConnection{
 		statsID: fmt.Sprintf("PeerConnection-%d", time.Now().UnixNano()),
 		configuration: Configuration{
@@ -114,18 +116,20 @@ func (api *API) NewPeerConnection(configuration Configuration) (*PeerConnection,
 			Certificates:         []Certificate{},
 			ICECandidatePoolSize: 0,
 		},
-		ops:                    newOperations(),
-		isClosed:               &atomicBool{},
-		isNegotiationNeeded:    &atomicBool{},
-		negotiationNeededState: negotiationNeededStateEmpty,
-		lastOffer:              "",
-		lastAnswer:             "",
-		greaterMid:             -1,
-		signalingState:         SignalingStateStable,
+		isClosed:                                &atomicBool{},
+		isClosedDone:                            make(chan struct{}),
+		isNegotiationNeeded:                     &atomicBool{},
+		updateNegotiationNeededFlagOnEmptyChain: &atomicBool{},
+		lastOffer:                               "",
+		lastAnswer:                              "",
+		greaterMid:                              -1,
+		signalingState:                          SignalingStateStable,
 
 		api: api,
 		log: api.settingEngine.LoggerFactory.NewLogger("pc"),
 	}
+	pc.ops = newOperations(pc.updateNegotiationNeededFlagOnEmptyChain, pc.onNegotiationNeeded)
+
 	pc.iceConnectionState.Store(ICEConnectionStateNew)
 	pc.connectionState.Store(PeerConnectionStateNew)
 
@@ -277,66 +281,54 @@ func (pc *PeerConnection) OnNegotiationNeeded(f func()) {
 
 // onNegotiationNeeded enqueues negotiationNeededOp if necessary
 // caller of this method should hold `pc.mu` lock
+// https://www.w3.org/TR/webrtc/#dfn-update-the-negotiation-needed-flag
 func (pc *PeerConnection) onNegotiationNeeded() {
-	// https://w3c.github.io/webrtc-pc/#updating-the-negotiation-needed-flag
-	// non-canon step 1
-	if pc.negotiationNeededState == negotiationNeededStateRun {
-		pc.negotiationNeededState = negotiationNeededStateQueue
-		return
-	} else if pc.negotiationNeededState == negotiationNeededStateQueue {
+	// 4.7.3.1 If the length of connection.[[Operations]] is not 0, then set
+	// connection.[[UpdateNegotiationNeededFlagOnEmptyChain]] to true, and abort these steps.
+	if !pc.ops.IsEmpty() {
+		pc.updateNegotiationNeededFlagOnEmptyChain.set(true)
 		return
 	}
-	pc.negotiationNeededState = negotiationNeededStateRun
 	pc.ops.Enqueue(pc.negotiationNeededOp)
 }
 
+// https://www.w3.org/TR/webrtc/#dfn-update-the-negotiation-needed-flag
 func (pc *PeerConnection) negotiationNeededOp() {
-	// Don't run NegotiatedNeeded checks if OnNegotiationNeeded is not set
-	if handler, ok := pc.onNegotiationNeededHandler.Load().(func()); !ok || handler == nil {
-		return
-	}
-
-	// https://www.w3.org/TR/webrtc/#updating-the-negotiation-needed-flag
-	// Step 2.1
+	// 4.7.3.2.1 If connection.[[IsClosed]] is true, abort these steps.
 	if pc.isClosed.get() {
 		return
 	}
-	// non-canon step 2.2
+
+	// 4.7.3.2.2 If the length of connection.[[Operations]] is not 0,
+	// then set connection.[[UpdateNegotiationNeededFlagOnEmptyChain]] to
+	// true, and abort these steps.
 	if !pc.ops.IsEmpty() {
-		pc.ops.Enqueue(pc.negotiationNeededOp)
+		pc.updateNegotiationNeededFlagOnEmptyChain.set(true)
 		return
 	}
 
-	// non-canon, run again if there was a request
-	defer func() {
-		pc.mu.Lock()
-		defer pc.mu.Unlock()
-		if pc.negotiationNeededState == negotiationNeededStateQueue {
-			defer pc.onNegotiationNeeded()
-		}
-		pc.negotiationNeededState = negotiationNeededStateEmpty
-	}()
-
-	// Step 2.3
+	// 4.7.3.2.3 If connection's signaling state is not "stable", abort these steps.
 	if pc.SignalingState() != SignalingStateStable {
 		return
 	}
 
-	// Step 2.4
+	// 4.7.3.2.4 If the result of checking if negotiation is needed is false,
+	// clear the negotiation-needed flag by setting connection.[[NegotiationNeeded]]
+	// to false, and abort these steps.
 	if !pc.checkNegotiationNeeded() {
 		pc.isNegotiationNeeded.set(false)
 		return
 	}
 
-	// Step 2.5
+	// 4.7.3.2.5 If connection.[[NegotiationNeeded]] is already true, abort these steps.
 	if pc.isNegotiationNeeded.get() {
 		return
 	}
 
-	// Step 2.6
+	// 4.7.3.2.6 Set connection.[[NegotiationNeeded]] to true.
 	pc.isNegotiationNeeded.set(true)
 
-	// Step 2.7
+	// 4.7.3.2.7 Fire an event named negotiationneeded at connection.
 	if handler, ok := pc.onNegotiationNeededHandler.Load().(func()); ok && handler != nil {
 		handler()
 	}
@@ -1326,7 +1318,7 @@ func runIfNewReceiver(
 	return false
 }
 
-// configurepRTPReceivers opens knows inbound SRTP streams from the RemoteDescription
+// configureRTPReceivers opens knows inbound SRTP streams from the RemoteDescription
 func (pc *PeerConnection) configureRTPReceivers(isRenegotiation bool, remoteDesc *SessionDescription, currentTransceivers []*RTPTransceiver) { //nolint:gocognit
 	incomingTracks := trackDetailsFromSDP(pc.log, remoteDesc.parsed)
 
@@ -2054,14 +2046,31 @@ func (pc *PeerConnection) writeRTCP(pkts []rtcp.Packet, _ interceptor.Attributes
 	return pc.dtlsTransport.WriteRTCP(pkts)
 }
 
-// Close ends the PeerConnection
+// Close ends the PeerConnection.
+// It will make a best effort to wait for all underlying goroutines it spawned to finish,
+// except for cases that would cause deadlocks with itself.
 func (pc *PeerConnection) Close() error {
 	// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close (step #1)
 	// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close (step #2)
 	if pc.isClosed.swap(true) {
+		// someone else got here first but may still be closing (e.g. via DTLS close_notify)
+		<-pc.isClosedDone
 		return nil
 	}
+	defer close(pc.isClosedDone)
 
+	// Try closing everything and collect the errors
+	// Shutdown strategy:
+	// 1. Close all data channels.
+	// 2. All Conn close by closing their underlying Conn.
+	// 3. A Mux stops this chain. It won't close the underlying
+	//    Conn if one of the endpoints is closed down. To
+	//    continue the chain the Mux has to be closed.
+	pc.sctpTransport.lock.Lock()
+	closeErrs := make([]error, 0, 4+len(pc.sctpTransport.dataChannels))
+	pc.sctpTransport.lock.Unlock()
+
+	// canon steps
 	// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close (step #3)
 	pc.signalingState.Set(SignalingStateClosed)
 
@@ -2071,7 +2080,6 @@ func (pc *PeerConnection) Close() error {
 	// 2. A Mux stops this chain. It won't close the underlying
 	//    Conn if one of the endpoints is closed down. To
 	//    continue the chain the Mux has to be closed.
-	closeErrs := make([]error, 4)
 
 	closeErrs = append(closeErrs, pc.api.interceptor.Close())
 
@@ -2098,7 +2106,6 @@ func (pc *PeerConnection) Close() error {
 
 	// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close (step #7)
 	closeErrs = append(closeErrs, pc.dtlsTransport.Stop())
-
 	// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close (step #8, #9, #10)
 	if pc.iceTransport != nil {
 		closeErrs = append(closeErrs, pc.iceTransport.Stop())
@@ -2106,6 +2113,13 @@ func (pc *PeerConnection) Close() error {
 
 	// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close (step #11)
 	pc.updateConnectionState(pc.ICEConnectionState(), pc.dtlsTransport.State())
+
+	// non-canon steps
+	pc.sctpTransport.lock.Lock()
+	for _, d := range pc.sctpTransport.dataChannels {
+		closeErrs = append(closeErrs, d.close(true))
+	}
+	pc.sctpTransport.lock.Unlock()
 
 	return util.FlattenErrs(closeErrs)
 }
@@ -2278,8 +2292,11 @@ func (pc *PeerConnection) startTransports(iceRole ICERole, dtlsRole DTLSRole, re
 	}
 
 	pc.dtlsTransport.internalOnCloseHandler = func() {
-		pc.log.Info("Closing PeerConnection from DTLS CloseNotify")
+		if pc.isClosed.get() {
+			return
+		}
 
+		pc.log.Info("Closing PeerConnection from DTLS CloseNotify")
 		go func() {
 			if pcClosErr := pc.Close(); pcClosErr != nil {
 				pc.log.Warnf("Failed to close PeerConnection from DTLS CloseNotify: %s", pcClosErr)

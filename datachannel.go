@@ -40,6 +40,7 @@ type DataChannel struct {
 	readyState                 atomic.Value // DataChannelState
 	bufferedAmountLowThreshold uint64
 	detachCalled               bool
+	readLoopActive             chan struct{}
 
 	// The binaryType represents attribute MUST, on getting, return the value to
 	// which it was last set. On setting, if the new value is either the string
@@ -236,7 +237,7 @@ func (d *DataChannel) onOpen() {
 }
 
 // OnDial sets an event handler which is invoked when the
-// peer has been dialed, but before said peer has responsed
+// peer has been dialed, but before said peer has responded
 func (d *DataChannel) OnDial(f func()) {
 	d.mu.Lock()
 	d.dialHandlerOnce = sync.Once{}
@@ -327,6 +328,7 @@ func (d *DataChannel) handleOpen(dc *datachannel.DataChannel, isRemote, isAlread
 	defer d.mu.Unlock()
 
 	if !d.api.settingEngine.detach.DataChannels {
+		d.readLoopActive = make(chan struct{})
 		go d.readLoop()
 	}
 }
@@ -349,18 +351,12 @@ func (d *DataChannel) onError(err error) {
 	}
 }
 
-// See https://github.com/pion/webrtc/issues/1516
-// nolint:gochecknoglobals
-var rlBufPool = sync.Pool{New: func() interface{} {
-	return make([]byte, dataChannelBufferSize)
-}}
-
 func (d *DataChannel) readLoop() {
+	defer close(d.readLoopActive)
+	buffer := make([]byte, dataChannelBufferSize)
 	for {
-		buffer := rlBufPool.Get().([]byte) //nolint:forcetypeassert
 		n, isString, err := d.dataChannel.ReadDataChannel(buffer)
 		if err != nil {
-			rlBufPool.Put(buffer) // nolint:staticcheck
 			d.setReadyState(DataChannelStateClosed)
 			if !errors.Is(err, io.EOF) {
 				d.onError(err)
@@ -371,8 +367,6 @@ func (d *DataChannel) readLoop() {
 
 		m := DataChannelMessage{Data: make([]byte, n), IsString: isString}
 		copy(m.Data, buffer[:n])
-		// The 'staticcheck' pragma is a false positive on the part of the CI linter.
-		rlBufPool.Put(buffer) // nolint:staticcheck
 
 		// NB: Why was DataChannelMessage not passed as a pointer value?
 		d.onMessage(m) // nolint:staticcheck
@@ -458,6 +452,22 @@ func (d *DataChannel) Detach() (datachannel.ReadWriteCloser, error) {
 // Close Closes the DataChannel. It may be called regardless of whether
 // the DataChannel object was created by this peer or the remote peer.
 func (d *DataChannel) Close() error {
+	return d.close(false)
+}
+
+// Normally, close only stops writes from happening, so waitForReadsDone=true
+// will wait for reads to be finished based on underlying SCTP association
+// closure or a SCTP reset stream from the other side. This is safe to call
+// with waitForReadsDone=true after tearing down a PeerConnection but not
+// necessarily before. For example, if you used a vnet and dropped all packets
+// right before closing the DataChannel, you'd need never see a reset stream.
+func (d *DataChannel) close(waitForReadsDone bool) error {
+	if waitForReadsDone && d.readLoopActive != nil {
+		defer func() {
+			<-d.readLoopActive
+		}()
+	}
+
 	d.mu.Lock()
 	haveSctpTransport := d.dataChannel != nil
 	d.mu.Unlock()
