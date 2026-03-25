@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -62,7 +62,7 @@ func TestValueToICECandidate(t *testing.T) {
 	}
 
 	for i, testCase := range testCases {
-		v := map[string]interface{}{}
+		v := map[string]any{}
 		err := json.Unmarshal([]byte(testCase.jsonCandidate), &v)
 		if err != nil {
 			t.Errorf("Case %d: bad test, got error: %v", i, err)
@@ -103,4 +103,42 @@ func TestValueToICEServer(t *testing.T) {
 		s := valueToICEServer(v)
 		assert.Equal(t, testCase, s)
 	}
+}
+
+func TestPeerConnectionCanTrickleICECandidatesJS(t *testing.T) {
+	pc := &PeerConnection{
+		underlying: js.ValueOf(map[string]any{
+			"canTrickleIceCandidates": true,
+		}),
+	}
+	assert.Equal(t, ICETrickleCapabilitySupported, pc.CanTrickleICECandidates())
+
+	pc.underlying = js.ValueOf(map[string]any{
+		"canTrickleIceCandidates": false,
+	})
+	assert.Equal(t, ICETrickleCapabilityUnsupported, pc.CanTrickleICECandidates())
+
+	pc.underlying = js.ValueOf(map[string]any{})
+	assert.Equal(t, ICETrickleCapabilityUnknown, pc.CanTrickleICECandidates())
+}
+
+func TestDTLSTransportGetRemoteCertificateMock(t *testing.T) {
+	expected := []byte{0x01, 0x02, 0x03, 0x04}
+
+	u8 := js.Global().Get("Uint8Array").New(len(expected))
+	if n := js.CopyBytesToJS(u8, expected); n != len(expected) {
+		t.Fatalf("copied %d bytes to Uint8Array; expected %d", n, len(expected))
+	}
+	certBuffer := u8.Get("buffer")
+
+	getRemoteCertificates := js.FuncOf(func(this js.Value, args []js.Value) any {
+		return js.ValueOf([]any{certBuffer})
+	})
+	defer getRemoteCertificates.Release()
+
+	mockTransport := js.Global().Get("Object").New()
+	mockTransport.Set("getRemoteCertificates", getRemoteCertificates)
+
+	dtlsTransport := &DTLSTransport{underlying: mockTransport}
+	assert.Equal(t, expected, dtlsTransport.GetRemoteCertificate())
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 // Package h264reader implements a H264 Annex-B Reader
@@ -10,7 +10,7 @@ import (
 	"io"
 )
 
-// H264Reader reads data from stream and constructs h264 nal units
+// H264Reader reads data from stream and constructs h264 nal units.
 type H264Reader struct {
 	stream                      io.Reader
 	nalBuffer                   []byte
@@ -18,6 +18,7 @@ type H264Reader struct {
 	nalPrefixParsed             bool
 	readBuffer                  []byte
 	tmpReadBuf                  []byte
+	includeSEI                  bool
 }
 
 var (
@@ -25,7 +26,7 @@ var (
 	errDataIsNotH264Stream = errors.New("data is not a H264 bitstream")
 )
 
-// NewReader creates new H264Reader
+// NewReader creates new H264Reader.
 func NewReader(in io.Reader) (*H264Reader, error) {
 	if in == nil {
 		return nil, errNilReader
@@ -37,12 +38,43 @@ func NewReader(in io.Reader) (*H264Reader, error) {
 		nalPrefixParsed: false,
 		readBuffer:      make([]byte, 0),
 		tmpReadBuf:      make([]byte, 4096),
+		includeSEI:      false,
 	}
 
 	return reader, nil
 }
 
-// NAL H.264 Network Abstraction Layer
+// Option configures the behavior of H264Reader.
+type Option func(*H264Reader) error
+
+// NewReaderWithOptions creates new H264Reader with options.
+// The default behavior is to skip SEI NAL units.
+func NewReaderWithOptions(in io.Reader, options ...Option) (*H264Reader, error) {
+	reader, err := NewReader(in)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, option := range options {
+		if err := option(reader); err != nil {
+			return nil, err
+		}
+	}
+
+	return reader, nil
+}
+
+// WithIncludeSEI controls whether SEI (Supplemental Enhancement Information) NAL units are returned.
+// Default is false (SEI is skipped).
+func WithIncludeSEI(include bool) Option {
+	return func(r *H264Reader) error {
+		r.includeSEI = include
+
+		return nil
+	}
+}
+
+// NAL H.264 Network Abstraction Layer.
 type NAL struct {
 	PictureOrderCount uint32
 
@@ -65,14 +97,11 @@ func (reader *H264Reader) read(numToRead int) (data []byte, e error) {
 		}
 		reader.readBuffer = append(reader.readBuffer, reader.tmpReadBuf[0:n]...)
 	}
-	var numShouldRead int
-	if numToRead <= len(reader.readBuffer) {
-		numShouldRead = numToRead
-	} else {
-		numShouldRead = len(reader.readBuffer)
-	}
+
+	numShouldRead := min(numToRead, len(reader.readBuffer))
 	data = reader.readBuffer[0:numShouldRead]
 	reader.readBuffer = reader.readBuffer[numShouldRead:]
+
 	return data, nil
 }
 
@@ -82,7 +111,7 @@ func (reader *H264Reader) bitStreamStartsWithH264Prefix() (prefixLength int, e e
 
 	prefixBuffer, e := reader.read(4)
 	if e != nil {
-		return
+		return prefixLength, e
 	}
 
 	n := len(prefixBuffer)
@@ -100,12 +129,14 @@ func (reader *H264Reader) bitStreamStartsWithH264Prefix() (prefixLength int, e e
 		if nalPrefix3BytesFound {
 			return 0, io.EOF
 		}
+
 		return 0, errDataIsNotH264Stream
 	}
 
 	// n == 4
 	if nalPrefix3BytesFound {
 		reader.nalBuffer = append(reader.nalBuffer, prefixBuffer[3])
+
 		return 3, nil
 	}
 
@@ -113,6 +144,7 @@ func (reader *H264Reader) bitStreamStartsWithH264Prefix() (prefixLength int, e e
 	if nalPrefix4BytesFound {
 		return 4, nil
 	}
+
 	return 0, errDataIsNotH264Stream
 }
 
@@ -145,10 +177,12 @@ func (reader *H264Reader) NextNAL() (*NAL, error) {
 		if nalFound {
 			nal := newNal(reader.nalBuffer)
 			nal.parseHeader()
-			if nal.UnitType == NalUnitTypeSEI {
+			if !reader.includeSEI && nal.UnitType == NalUnitTypeSEI {
 				reader.nalBuffer = nil
+
 				continue
 			}
+
 			break
 		}
 

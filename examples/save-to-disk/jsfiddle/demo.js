@@ -1,6 +1,6 @@
 /* eslint-env browser */
 
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 const pc = new RTCPeerConnection({
@@ -24,9 +24,7 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true })
 
 pc.oniceconnectionstatechange = e => log(pc.iceConnectionState)
 pc.onicecandidate = event => {
-  if (event.candidate === null) {
-    document.getElementById('localSessionDescription').value = btoa(JSON.stringify(pc.localDescription))
-  }
+  document.getElementById('localSessionDescription').value = btoa(JSON.stringify(pc.localDescription))
 }
 
 window.startSession = () => {

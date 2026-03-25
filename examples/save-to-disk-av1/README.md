@@ -5,7 +5,7 @@ If you wish to save VP8 and Opus instead of AV1 see [save-to-disk](https://githu
 
 If you wish to save VP8/Opus inside the same file see [save-to-webm](https://github.com/pion/example-webrtc-applications/tree/master/save-to-webm)
 
-You can then send this video back to your browser using [play-from-disk](https://github.com/pion/example-webrtc-applications/tree/master/play-from-disk)
+You can then send this video back to your browser using [play-from-disk](https://github.com/pion/webrtc/tree/master/examples/play-from-disk)
 
 ## Instructions
 ### Download save-to-disk-av1
@@ -14,7 +14,7 @@ go install github.com/pion/webrtc/v4/examples/save-to-disk-av1@latest
 ```
 
 ### Open save-to-disk-av1 example page
-[jsfiddle.net](https://jsfiddle.net/xjcve6d3/) you should see your Webcam, two text-areas and two buttons: `Copy browser SDP to clipboard`, `Start Session`.
+[jsfiddle.net](https://jsfiddle.net/8jv91r25/) you should see your Webcam, two text-areas and two buttons: `Copy browser SDP to clipboard`, `Start Session`.
 
 ### Run save-to-disk-av1, with your browsers SessionDescription as stdin
 In the jsfiddle the top textarea is your browser's Session Description. Press `Copy browser SDP to clipboard` or copy the base64 string manually.

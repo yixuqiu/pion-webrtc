@@ -1,11 +1,13 @@
 # save-to-disk
 save-to-disk is a simple application that shows how to record your webcam/microphone using Pion WebRTC and save VP8/Opus to disk.
 
+If you wish to save VP9 instead of VP8 you can just replace all occurences of VP8 with VP9 in [main.go](https://github.com/pion/example-webrtc-applications/tree/master/save-to-disk/main.go).
+
 If you wish to save VP8/Opus inside the same file see [save-to-webm](https://github.com/pion/example-webrtc-applications/tree/master/save-to-webm)
 
 If you wish to save AV1 instead see [save-to-disk-av1](https://github.com/pion/webrtc/tree/master/examples/save-to-disk-av1)
 
-You can then send this video back to your browser using [play-from-disk](https://github.com/pion/example-webrtc-applications/tree/master/play-from-disk)
+You can then send this video back to your browser using [play-from-disk](https://github.com/pion/webrtc/tree/master/examples/play-from-disk)
 
 ## Instructions
 ### Download save-to-disk
@@ -14,7 +16,7 @@ go install github.com/pion/webrtc/v4/examples/save-to-disk@latest
 ```
 
 ### Open save-to-disk example page
-[jsfiddle.net](https://jsfiddle.net/s179hacu/) you should see your Webcam, two text-areas and two buttons: `Copy browser SDP to clipboard`, `Start Session`.
+[jsfiddle.net](https://jsfiddle.net/2nwt1vjq/) you should see your Webcam, two text-areas and two buttons: `Copy browser SDP to clipboard`, `Start Session`.
 
 ### Run save-to-disk, with your browsers SessionDescription as stdin
 In the jsfiddle the top textarea is your browser's Session Description. Press `Copy browser SDP to clipboard` or copy the base64 string manually.

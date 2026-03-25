@@ -1,30 +1,39 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 // stats demonstrates how to use the webrtc-stats implementation provided by Pion WebRTC.
 package main
 
 import (
+	"bufio"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/stats"
 	"github.com/pion/webrtc/v4"
-	"github.com/pion/webrtc/v4/examples/internal/signal"
 )
 
-// nolint:gocognit
+// How ofter to print WebRTC stats.
+const statsInterval = time.Second * 5
+
+// nolint:gocognit,cyclop
 func main() {
 	// Everything below is the Pion WebRTC API! Thanks for using it ❤️.
 
 	// Create a MediaEngine object to configure the supported codec
-	m := &webrtc.MediaEngine{}
+	mediaEngine := &webrtc.MediaEngine{}
 
-	if err := m.RegisterDefaultCodecs(); err != nil {
+	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
 		panic(err)
 	}
 
@@ -32,7 +41,7 @@ func main() {
 	// This provides NACKs, RTCP Reports and other features. If you use `webrtc.NewPeerConnection`
 	// this is enabled by default. If you are manually managing You MUST create a InterceptorRegistry
 	// for each PeerConnection.
-	i := &interceptor.Registry{}
+	interceptorRegistry := &interceptor.Registry{}
 
 	statsInterceptorFactory, err := stats.NewInterceptor()
 	if err != nil {
@@ -43,15 +52,15 @@ func main() {
 	statsInterceptorFactory.OnNewPeerConnection(func(_ string, g stats.Getter) {
 		statsGetter = g
 	})
-	i.Add(statsInterceptorFactory)
+	interceptorRegistry.Add(statsInterceptorFactory)
 
 	// Use the default set of Interceptors
-	if err = webrtc.RegisterDefaultInterceptors(m, i); err != nil {
+	if err = webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
 		panic(err)
 	}
 
 	// Create the API object with the MediaEngine
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(i))
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine), webrtc.WithInterceptorRegistry(interceptorRegistry))
 
 	// Prepare the configuration
 	config := webrtc.Configuration{
@@ -81,13 +90,14 @@ func main() {
 		fmt.Printf("New incoming track with codec: %s\n", track.Codec().MimeType)
 
 		go func() {
+			// Print the stats for this individual track
 			for {
 				stats := statsGetter.Get(uint32(track.SSRC()))
 
 				fmt.Printf("Stats for: %s\n", track.Codec().MimeType)
 				fmt.Println(stats.InboundRTPStreamStats)
 
-				time.Sleep(time.Second * 5)
+				time.Sleep(statsInterval)
 			}
 		}()
 
@@ -100,15 +110,19 @@ func main() {
 		}
 	})
 
+	var iceConnectionState atomic.Value
+	iceConnectionState.Store(webrtc.ICEConnectionStateNew)
+
 	// Set the handler for ICE connection state
 	// This will notify you when the peer has connected/disconnected
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		fmt.Printf("Connection State has changed %s \n", connectionState.String())
+		iceConnectionState.Store(connectionState)
 	})
 
 	// Wait for the offer to be pasted
 	offer := webrtc.SessionDescription{}
-	signal.Decode(signal.MustReadStdin(), &offer)
+	decode(readUntilNewline(), &offer)
 
 	// Set the remote SessionDescription
 	err = peerConnection.SetRemoteDescription(offer)
@@ -137,8 +151,68 @@ func main() {
 	<-gatherComplete
 
 	// Output the answer in base64 so we can paste it in browser
-	fmt.Println(signal.Encode(*peerConnection.LocalDescription()))
+	fmt.Println(encode(peerConnection.LocalDescription()))
 
-	// Block forever
-	select {}
+	for {
+		time.Sleep(statsInterval)
+
+		// Stats are only printed after completed to make Copy/Pasting easier
+		if iceConnectionState.Load() == webrtc.ICEConnectionStateChecking {
+			continue
+		}
+
+		// Only print the remote IPs seen
+		for _, s := range peerConnection.GetStats() {
+			switch stat := s.(type) {
+			case webrtc.ICECandidateStats:
+				if stat.Type == webrtc.StatsTypeRemoteCandidate {
+					fmt.Printf("%s IP(%s) Port(%d)\n", stat.Type, stat.IP, stat.Port)
+				}
+			default:
+			}
+		}
+	}
+}
+
+// Read from stdin until we get a newline.
+func readUntilNewline() (in string) {
+	var err error
+
+	r := bufio.NewReader(os.Stdin)
+	for {
+		in, err = r.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			panic(err)
+		}
+
+		if in = strings.TrimSpace(in); len(in) > 0 {
+			break
+		}
+	}
+
+	fmt.Println("")
+
+	return
+}
+
+// JSON encode + base64 a SessionDescription.
+func encode(obj *webrtc.SessionDescription) string {
+	b, err := json.Marshal(obj)
+	if err != nil {
+		panic(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// Decode a base64 and unmarshal JSON into a SessionDescription.
+func decode(in string, obj *webrtc.SessionDescription) {
+	b, err := base64.StdEncoding.DecodeString(in)
+	if err != nil {
+		panic(err)
+	}
+
+	if err = json.Unmarshal(b, obj); err != nil {
+		panic(err)
+	}
 }

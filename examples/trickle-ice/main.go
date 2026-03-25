@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 // trickle-ice demonstrates Pion WebRTC's Trickle ICE APIs.  ICE is the subsystem WebRTC uses to establish connectivity.
@@ -15,7 +15,8 @@ import (
 )
 
 // websocketServer is called for every new inbound WebSocket
-func websocketServer(ws *websocket.Conn) { // nolint:gocognit
+// nolint: gocognit, cyclop
+func websocketServer(wsConn *websocket.Conn) {
 	// Create a new RTCPeerConnection
 	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
@@ -26,18 +27,22 @@ func websocketServer(ws *websocket.Conn) { // nolint:gocognit
 	// ice trickle is implemented. Everytime we have a new candidate available we send
 	// it as soon as it is ready. We don't wait to emit a Offer/Answer until they are
 	// all available
-	peerConnection.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
+	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate == nil {
 			return
 		}
 
-		outbound, marshalErr := json.Marshal(c.ToJSON())
+		outbound, marshalErr := json.Marshal(candidate.ToJSON())
 		if marshalErr != nil {
-			panic(marshalErr)
+			fmt.Println("Marshal ICECandidate error:", marshalErr)
+
+			return
 		}
 
-		if _, err = ws.Write(outbound); err != nil {
-			panic(err)
+		if _, err = wsConn.Write(outbound); err != nil {
+			fmt.Println("WebSocket write error:", err)
+
+			return
 		}
 	})
 
@@ -50,20 +55,30 @@ func websocketServer(ws *websocket.Conn) { // nolint:gocognit
 	// Send the current time via a DataChannel to the remote peer every 3 seconds
 	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
 		d.OnOpen(func() {
-			for range time.Tick(time.Second * 3) {
-				if err = d.SendText(time.Now().String()); err != nil {
-					panic(err)
+			fmt.Println(time.Now().Format("15:04:05"), "- DataChannel open")
+			// Periodically send timestamped messages
+			go func() {
+				ticker := time.NewTicker(time.Second * 3)
+				defer ticker.Stop()
+				for range ticker.C {
+					if err := d.SendText(time.Now().String()); err != nil {
+						fmt.Println(time.Now().Format("15:04:05"), "- DataChannel closed, stopping send loop")
+
+						return
+					}
 				}
-			}
+			}()
 		})
 	})
 
 	buf := make([]byte, 1500)
 	for {
 		// Read each inbound WebSocket Message
-		n, err := ws.Read(buf)
+		n, err := wsConn.Read(buf)
 		if err != nil {
-			panic(err)
+			fmt.Println(time.Now().Format("15:04:05"), "- WebSocket read error:", err)
+
+			return
 		}
 
 		// Unmarshal each inbound WebSocket message
@@ -77,34 +92,46 @@ func websocketServer(ws *websocket.Conn) { // nolint:gocognit
 		// assume it is not one.
 		case json.Unmarshal(buf[:n], &offer) == nil && offer.SDP != "":
 			if err = peerConnection.SetRemoteDescription(offer); err != nil {
-				panic(err)
+				fmt.Println("SetRemoteDescription error:", err)
+
+				return
 			}
 
 			answer, answerErr := peerConnection.CreateAnswer(nil)
 			if answerErr != nil {
-				panic(answerErr)
+				fmt.Println("CreateAnswer error:", err)
+
+				return
 			}
 
 			if err = peerConnection.SetLocalDescription(answer); err != nil {
-				panic(err)
+				fmt.Println("SetLocalDescription error:", err)
+
+				return
 			}
 
 			outbound, marshalErr := json.Marshal(answer)
 			if marshalErr != nil {
-				panic(marshalErr)
+				fmt.Println("Marshal answer error:", err)
+
+				return
 			}
 
-			if _, err = ws.Write(outbound); err != nil {
-				panic(err)
+			if _, err = wsConn.Write(outbound); err != nil {
+				fmt.Println("WebSocket write error:", err)
+
+				return
 			}
 		// Attempt to unmarshal as a ICECandidateInit. If the candidate field is empty
 		// assume it is not one.
 		case json.Unmarshal(buf[:n], &candidate) == nil && candidate.Candidate != "":
 			if err = peerConnection.AddICECandidate(candidate); err != nil {
-				panic(err)
+				fmt.Println("AddICECandidate error:", err)
+
+				return
 			}
 		default:
-			panic("Unknown message")
+			fmt.Println("Unknown WebSocket message")
 		}
 	}
 }

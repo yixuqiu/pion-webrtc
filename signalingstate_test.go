@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -160,4 +160,13 @@ func TestSignalingState_Transitions(t *testing.T) {
 			)
 		}
 	}
+}
+
+func TestStateChangeOp_String_SetLocal(t *testing.T) {
+	assert.Equal(t, "SetLocal", stateChangeOpSetLocal.String())
+}
+
+func TestStateChangeOp_String_Default(t *testing.T) {
+	var unknown stateChangeOp = 999
+	assert.Equal(t, "Unknown State Change Operation", unknown.String())
 }

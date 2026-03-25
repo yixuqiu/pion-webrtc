@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
@@ -11,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/transport/v3/test"
+	"github.com/pion/transport/v4/test"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -47,7 +46,7 @@ func Test_RTPTransceiverInit_SSRC(t *testing.T) {
 		})
 		assert.NoError(t, err)
 		assert.NoError(t, signalPair(offerer, answerer))
-		sendVideoUntilDone(ctx.Done(), t, []*TrackLocalStaticSample{track})
+		sendVideoUntilDone(t, ctx.Done(), []*TrackLocalStaticSample{track})
 		closePairNow(t, offerer, answerer)
 	})
 
@@ -73,7 +72,7 @@ func Test_RTPTransceiverInit_SSRC(t *testing.T) {
 		})
 		assert.NoError(t, err)
 		assert.NoError(t, signalPair(offerer, answerer))
-		sendVideoUntilDone(ctx.Done(), t, []*TrackLocalStaticSample{track})
+		sendVideoUntilDone(t, ctx.Done(), []*TrackLocalStaticSample{track})
 		closePairNow(t, offerer, answerer)
 	})
 }

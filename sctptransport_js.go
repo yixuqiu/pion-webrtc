@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build js && wasm
@@ -12,6 +12,11 @@ import "syscall/js"
 type SCTPTransport struct {
 	// Pointer to the underlying JavaScript SCTPTransport object.
 	underlying js.Value
+}
+
+// JSValue returns the underlying RTCSctpTransport
+func (r *SCTPTransport) JSValue() js.Value {
+	return r.underlying
 }
 
 // Transport returns the DTLSTransport instance the SCTPTransport is sending over.

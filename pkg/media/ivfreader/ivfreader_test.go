@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ivfreader
@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// buildIVFContainer takes frames and prepends valid IVF file header
+// buildIVFContainer takes frames and prepends valid IVF file header.
 func buildIVFContainer(frames ...*[]byte) *bytes.Buffer {
 	// Valid IVF file header taken from: https://github.com/webmproject/...
 	// vp8-test-vectors/blob/master/vp80-00-comprehensive-001.ivf
@@ -53,6 +53,20 @@ func TestIVFReader_ParseValidFileHeader(t *testing.T) {
 	assert.Equal(uint32(1000), header.TimebaseNumerator, "timebase numerator should be 1000")
 	assert.Equal(uint32(29), header.NumFrames, "number of frames should be 29")
 	assert.Equal(uint32(0), header.unused, "bytes should be unused")
+}
+
+func TestIVFReader_ErrorOnZeroTimebaseNumerator(t *testing.T) {
+	assert := assert.New(t)
+	ivf := buildIVFContainer(&[]byte{})
+	headerBytes := ivf.Bytes()
+	for i := 20; i < 24; i++ {
+		headerBytes[i] = 0
+	}
+
+	reader, header, err := NewWith(ivf)
+	assert.Nil(reader, "Reader should not be created for invalid timebase")
+	assert.Nil(header, "Header should be nil when timebase numerator is zero")
+	assert.Equal(errInvalidMediaTimebase, err, "zero timebase numerator should be invalid")
 }
 
 func TestIVFReader_ParseValidFrames(t *testing.T) {

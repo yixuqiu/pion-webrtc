@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
@@ -14,38 +13,22 @@ import (
 
 func TestNewAPI(t *testing.T) {
 	api := NewAPI()
-
-	if api.settingEngine == nil {
-		t.Error("Failed to init settings engine")
-	}
-
-	if api.mediaEngine == nil {
-		t.Error("Failed to init media engine")
-	}
-
-	if api.interceptorRegistry == nil {
-		t.Error("Failed to init interceptor registry")
-	}
+	assert.NotNil(t, api.settingEngine, "failed to init settings engine")
+	assert.NotNil(t, api.mediaEngine, "failed to init media engine")
+	assert.NotNil(t, api.interceptorRegistry, "failed to init interceptor registry")
 }
 
 func TestNewAPI_Options(t *testing.T) {
 	s := SettingEngine{}
 	s.DetachDataChannels()
-	m := MediaEngine{}
-	assert.NoError(t, m.RegisterDefaultCodecs())
 
 	api := NewAPI(
 		WithSettingEngine(s),
-		WithMediaEngine(&m),
 	)
 
-	if !api.settingEngine.detach.DataChannels {
-		t.Error("Failed to set settings engine")
-	}
-
-	if len(api.mediaEngine.audioCodecs) == 0 || len(api.mediaEngine.videoCodecs) == 0 {
-		t.Error("Failed to set media engine")
-	}
+	assert.True(t, api.settingEngine.detach.DataChannels, "failed to set settings engine")
+	assert.NotEmpty(t, api.mediaEngine.audioCodecs, "failed to set audio codecs")
+	assert.NotEmpty(t, api.mediaEngine.videoCodecs, "failed to set video codecs")
 }
 
 func TestNewAPI_OptionsDefaultize(t *testing.T) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 // Package ivfreader implements IVF media container reader
@@ -24,6 +24,7 @@ var (
 	errIncompleteFileHeader  = errors.New("incomplete file header")
 	errSignatureMismatch     = errors.New("IVF signature mismatch")
 	errUnknownIVFVersion     = errors.New("IVF version unknown, parser may not parse correctly")
+	errInvalidMediaTimebase  = errors.New("invalid media timebase")
 )
 
 // IVFFileHeader 32-byte header for IVF files
@@ -48,27 +49,34 @@ type IVFFrameHeader struct {
 	Timestamp uint64 // 4-11
 }
 
-// IVFReader is used to read IVF files and return frame payloads
+// IVFReader is used to read IVF files and return frame payloads.
 type IVFReader struct {
 	stream               io.Reader
 	bytesReadSuccesfully int64
+	timebaseDenominator  uint32
+	timebaseNumerator    uint32
 }
 
 // NewWith returns a new IVF reader and IVF file header
-// with an io.Reader input
-func NewWith(in io.Reader) (*IVFReader, *IVFFileHeader, error) {
-	if in == nil {
+// with an io.Reader input.
+func NewWith(stream io.Reader) (*IVFReader, *IVFFileHeader, error) {
+	if stream == nil {
 		return nil, nil, errNilStream
 	}
 
 	reader := &IVFReader{
-		stream: in,
+		stream: stream,
 	}
 
 	header, err := reader.parseFileHeader()
 	if err != nil {
 		return nil, nil, err
 	}
+	if header.TimebaseDenominator == 0 || header.TimebaseNumerator == 0 {
+		return nil, nil, errInvalidMediaTimebase
+	}
+	reader.timebaseDenominator = header.TimebaseDenominator
+	reader.timebaseNumerator = header.TimebaseNumerator
 
 	return reader, header, nil
 }
@@ -78,6 +86,10 @@ func NewWith(in io.Reader) (*IVFReader, *IVFFileHeader, error) {
 // data being finished.
 func (i *IVFReader) ResetReader(reset func(bytesRead int64) io.Reader) {
 	i.stream = reset(i.bytesReadSuccesfully)
+}
+
+func (i *IVFReader) ptsToTimestamp(pts uint64) uint64 {
+	return pts * uint64(i.timebaseDenominator) / uint64(i.timebaseNumerator)
 }
 
 // ParseNextFrame reads from stream and returns IVF frame payload, header,
@@ -95,9 +107,10 @@ func (i *IVFReader) ParseNextFrame() ([]byte, *IVFFrameHeader, error) {
 		return nil, nil, err
 	}
 
+	pts := binary.LittleEndian.Uint64(buffer[4:12])
 	header = &IVFFrameHeader{
 		FrameSize: binary.LittleEndian.Uint32(buffer[:4]),
-		Timestamp: binary.LittleEndian.Uint64(buffer[4:12]),
+		Timestamp: i.ptsToTimestamp(pts),
 	}
 
 	payload := make([]byte, header.FrameSize)
@@ -109,11 +122,12 @@ func (i *IVFReader) ParseNextFrame() ([]byte, *IVFFrameHeader, error) {
 	}
 
 	i.bytesReadSuccesfully += int64(headerBytesRead) + int64(bytesRead)
+
 	return payload, header, nil
 }
 
 // parseFileHeader reads 32 bytes from stream and returns
-// IVF file header. This is always called before ParseNextFrame()
+// IVF file header. This is always called before ParseNextFrame().
 func (i *IVFReader) parseFileHeader() (*IVFFileHeader, error) {
 	buffer := make([]byte, ivfFileHeaderSize)
 
@@ -144,5 +158,6 @@ func (i *IVFReader) parseFileHeader() (*IVFFileHeader, error) {
 	}
 
 	i.bytesReadSuccesfully += int64(bytesRead)
+
 	return header, nil
 }

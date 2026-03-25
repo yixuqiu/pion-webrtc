@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -24,8 +24,10 @@ func TestICECandidateType(t *testing.T) {
 
 	for i, testCase := range testCases {
 		actual, err := NewICECandidateType(testCase.typeString)
-		if (err != nil) != testCase.shouldFail {
-			t.Error(err)
+		if testCase.shouldFail {
+			assert.Error(t, err, "testCase: %d %v", i, testCase)
+		} else {
+			assert.NoError(t, err, "testCase: %d %v", i, testCase)
 		}
 		assert.Equal(t,
 			testCase.expectedType,

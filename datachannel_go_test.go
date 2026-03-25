@@ -1,18 +1,16 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
 import (
-	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"io"
 	"math/big"
-	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,7 +20,7 @@ import (
 
 	"github.com/pion/datachannel"
 	"github.com/pion/logging"
-	"github.com/pion/transport/v3/test"
+	"github.com/pion/transport/v4/test"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -73,16 +71,14 @@ func TestDataChannel_MessagesAreOrdered(t *testing.T) {
 	api := NewAPI()
 	dc := &DataChannel{api: api}
 
-	max := 512
+	maxVal := 512
 	out := make(chan int)
 	inner := func(msg DataChannelMessage) {
 		// randomly sleep
 		// math/rand a weak RNG, but this does not need to be secure. Ignore with #nosec
 		/* #nosec */
-		randInt, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
-		/* #nosec */ if err != nil {
-			t.Fatalf("Failed to get random sleep duration: %s", err)
-		}
+		randInt, err := rand.Int(rand.Reader, big.NewInt(int64(maxVal)))
+		assert.NoError(t, err, "Failed to get random sleep duration")
 		time.Sleep(time.Duration(randInt.Int64()) * time.Microsecond)
 		s, _ := binary.Varint(msg.Data)
 		out <- int(s)
@@ -92,7 +88,7 @@ func TestDataChannel_MessagesAreOrdered(t *testing.T) {
 	})
 
 	go func() {
-		for i := 1; i <= max; i++ {
+		for i := 1; i <= maxVal; i++ {
 			buf := make([]byte, 8)
 			binary.PutVarint(buf, int64(i))
 			dc.onMessage(DataChannelMessage{Data: buf})
@@ -107,16 +103,16 @@ func TestDataChannel_MessagesAreOrdered(t *testing.T) {
 		}
 	}()
 
-	values := make([]int, 0, max)
+	values := make([]int, 0, maxVal)
 	for v := range out {
 		values = append(values, v)
-		if len(values) == max {
+		if len(values) == maxVal {
 			close(out)
 		}
 	}
 
-	expected := make([]int, max)
-	for i := 1; i <= max; i++ {
+	expected := make([]int, maxVal)
+	for i := 1; i <= maxVal; i++ {
 		expected[i-1] = i
 	}
 	assert.EqualValues(t, expected, values)
@@ -180,7 +176,7 @@ func TestDataChannelParamters_Go(t *testing.T) {
 	})
 }
 
-func TestDataChannelBufferedAmount(t *testing.T) {
+func TestDataChannelBufferedAmount(t *testing.T) { //nolint:cyclop
 	t.Run("set before datachannel becomes open", func(t *testing.T) {
 		report := test.CheckRoutines(t)
 		defer report()
@@ -193,9 +189,7 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 		buf := make([]byte, 1000)
 
 		offerPC, answerPC, err := newPair()
-		if err != nil {
-			t.Fatalf("Failed to create a PC pair for testing")
-		}
+		assert.NoError(t, err)
 
 		nPacketsToSend := int(10)
 		var nOfferReceived uint32
@@ -213,11 +207,9 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 			answerDC.OnOpen(func() {
 				assert.Equal(t, answerBufferedAmountLowThreshold, answerDC.BufferedAmountLowThreshold(), "value mismatch")
 
-				for i := 0; i < nPacketsToSend; i++ {
+				for range nPacketsToSend {
 					e := answerDC.Send(buf)
-					if e != nil {
-						t.Fatalf("Failed to send string on data channel")
-					}
+					assert.NoError(t, e, "Failed to send string on data channel")
 				}
 			})
 
@@ -240,20 +232,15 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 		})
 
 		offerDC, err := offerPC.CreateDataChannel(expectedLabel, nil)
-		if err != nil {
-			t.Fatalf("Failed to create a PC pair for testing")
-		}
-
+		assert.NoError(t, err, "Failed to create a PC pair for testing")
 		assert.True(t, offerDC.Ordered(), "Ordered should be set to true")
 
 		offerDC.OnOpen(func() {
 			assert.Equal(t, offerBufferedAmountLowThreshold, offerDC.BufferedAmountLowThreshold(), "value mismatch")
 
-			for i := 0; i < nPacketsToSend; i++ {
+			for range nPacketsToSend {
 				e := offerDC.Send(buf)
-				if e != nil {
-					t.Fatalf("Failed to send string on data channel")
-				}
+				assert.NoError(t, e, "Failed to send string on data channel")
 				// assert.Equal(t, (i+1)*len(buf), int(offerDC.BufferedAmount()), "unexpected bufferedAmount")
 			}
 		})
@@ -275,9 +262,7 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 		})
 
 		err = signalPair(offerPC, answerPC)
-		if err != nil {
-			t.Fatalf("Failed to signal our PC pair for testing")
-		}
+		assert.NoError(t, err, "Failed to signal our PC pair for testing")
 
 		closePair(t, offerPC, answerPC, done)
 
@@ -291,24 +276,22 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 		report := test.CheckRoutines(t)
 		defer report()
 
-		var nCbs int
+		var nCbs uint32
 		buf := make([]byte, 1000)
 
 		offerPC, answerPC, err := newPair()
-		if err != nil {
-			t.Fatalf("Failed to create a PC pair for testing")
-		}
+		assert.NoError(t, err)
 
 		done := make(chan bool)
 
-		answerPC.OnDataChannel(func(d *DataChannel) {
+		answerPC.OnDataChannel(func(dataChannel *DataChannel) {
 			// Make sure this is the data channel we were looking for. (Not the one
 			// created in signalPair).
-			if d.Label() != expectedLabel {
+			if dataChannel.Label() != expectedLabel {
 				return
 			}
 			var nPacketsReceived int
-			d.OnMessage(func(DataChannelMessage) {
+			dataChannel.OnMessage(func(DataChannelMessage) {
 				nPacketsReceived++
 
 				if nPacketsReceived == 10 {
@@ -318,13 +301,11 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 					}()
 				}
 			})
-			assert.True(t, d.Ordered(), "Ordered should be set to true")
+			assert.True(t, dataChannel.Ordered(), "Ordered should be set to true")
 		})
 
 		dc, err := offerPC.CreateDataChannel(expectedLabel, nil)
-		if err != nil {
-			t.Fatalf("Failed to create a PC pair for testing")
-		}
+		assert.NoError(t, err)
 
 		assert.True(t, dc.Ordered(), "Ordered should be set to true")
 
@@ -333,14 +314,11 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 			dc.SetBufferedAmountLowThreshold(1500)
 			// The callback function should directly be passed to sctp
 			dc.OnBufferedAmountLow(func() {
-				nCbs++
+				atomic.AddUint32(&nCbs, 1)
 			})
 
-			for i := 0; i < 10; i++ {
-				e := dc.Send(buf)
-				if e != nil {
-					t.Fatalf("Failed to send string on data channel")
-				}
+			for range 10 {
+				assert.NoError(t, dc.Send(buf), "Failed to send string on data channel")
 				assert.Equal(t, uint64(1500), dc.BufferedAmountLowThreshold(), "value mismatch")
 				// assert.Equal(t, (i+1)*len(buf), int(dc.BufferedAmount()), "unexpected bufferedAmount")
 			}
@@ -349,18 +327,17 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 		dc.OnMessage(func(DataChannelMessage) {
 		})
 
-		err = signalPair(offerPC, answerPC)
-		if err != nil {
-			t.Fatalf("Failed to signal our PC pair for testing")
-		}
+		assert.NoError(t, signalPair(offerPC, answerPC))
 
 		closePair(t, offerPC, answerPC, done)
 
-		assert.True(t, nCbs > 0, "callback should be made at least once")
+		assert.True(t, atomic.LoadUint32(&nCbs) > 0, "callback should be made at least once")
 	})
 }
 
-func TestEOF(t *testing.T) {
+func TestEOF(t *testing.T) { //nolint:cyclop
+	t.Helper()
+
 	report := test.CheckRoutines(t)
 	defer report()
 
@@ -377,13 +354,9 @@ func TestEOF(t *testing.T) {
 		// Set up two peer connections.
 		config := Configuration{}
 		pca, err := api.NewPeerConnection(config)
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err)
 		pcb, err := api.NewPeerConnection(config)
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err)
 
 		defer closePairNow(t, pca, pcb)
 
@@ -397,10 +370,7 @@ func TestEOF(t *testing.T) {
 			log.Debug("OnDataChannel was called")
 			dc.OnOpen(func() {
 				detached, err2 := dc.Detach()
-				if err2 != nil {
-					log.Debugf("Detach failed: %s", err2.Error())
-					t.Error(err2)
-				}
+				assert.NoError(t, err2, "Detach failed")
 
 				dcChan <- detached
 			})
@@ -420,25 +390,15 @@ func TestEOF(t *testing.T) {
 			log.Debug("Waiting for ping...")
 			msg, err2 := io.ReadAll(dc)
 			log.Debugf("Received ping! \"%s\"", string(msg))
-			if err2 != nil {
-				t.Error(err2)
-			}
+			assert.NoError(t, err2)
 
-			if !bytes.Equal(msg, testData) {
-				t.Errorf("expected %q, got %q", string(msg), string(testData))
-			} else {
-				log.Debug("Received ping successfully!")
-			}
+			assert.Equal(t, testData, msg)
 		}()
 
-		if err = signalPair(pca, pcb); err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, signalPair(pca, pcb))
 
 		attached, err := pca.CreateDataChannel(label, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err)
 		log.Debug("Waiting for data channel to open")
 		open := make(chan struct{})
 		attached.OnOpen(func() {
@@ -449,17 +409,14 @@ func TestEOF(t *testing.T) {
 
 		var dc io.ReadWriteCloser
 		dc, err = attached.Detach()
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err)
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			log.Debug("Sending ping...")
-			if _, err2 := dc.Write(testData); err2 != nil {
-				t.Error(err2)
-			}
+			_, err = dc.Write(testData)
+			assert.NoError(t, err)
 			log.Debug("Sent ping")
 
 			assert.NoError(t, dc.Close(), "should succeed")
@@ -480,13 +437,9 @@ func TestEOF(t *testing.T) {
 		// Set up two peer connections.
 		config := Configuration{}
 		pca, err := NewPeerConnection(config)
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err)
 		pcb, err := NewPeerConnection(config)
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err)
 
 		defer closePairNow(t, pca, pcb)
 
@@ -517,23 +470,17 @@ func TestEOF(t *testing.T) {
 			log.Debug("pcb: registering onMessage callback")
 			dcb.OnMessage(func(dcMsg DataChannelMessage) {
 				log.Debugf("pcb: received ping: %s", string(dcMsg.Data))
-				if !reflect.DeepEqual(dcMsg.Data, testData) {
-					t.Error("data mismatch")
-				}
+				assert.Equal(t, testData, dcMsg.Data)
 			})
 		})
 
 		dca, err = pca.CreateDataChannel(label, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err)
 
 		dca.OnOpen(func() {
 			log.Debug("pca: data channel opened")
 			log.Debugf("pca: sending \"%s\"", string(testData))
-			if err := dca.Send(testData); err != nil {
-				t.Fatal(err)
-			}
+			assert.NoError(t, dca.Send(testData))
 			log.Debug("pca: sent ping")
 			assert.NoError(t, dca.Close(), "should succeed") // <-- dca closes
 		})
@@ -548,14 +495,10 @@ func TestEOF(t *testing.T) {
 		log.Debug("pca: registering onMessage callback")
 		dca.OnMessage(func(dcMsg DataChannelMessage) {
 			log.Debugf("pca: received pong: %s", string(dcMsg.Data))
-			if !reflect.DeepEqual(dcMsg.Data, testData) {
-				t.Error("data mismatch")
-			}
+			assert.Equal(t, testData, dcMsg.Data)
 		})
 
-		if err := signalPair(pca, pcb); err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, signalPair(pca, pcb))
 
 		// When dca closes the channel,
 		// (1) dca.Onclose() will fire immediately, then
@@ -566,7 +509,7 @@ func TestEOF(t *testing.T) {
 }
 
 // Assert that a Session Description that doesn't follow
-// draft-ietf-mmusic-sctp-sdp is still accepted
+// draft-ietf-mmusic-sctp-sdp is still accepted.
 func TestDataChannel_NonStandardSessionDescription(t *testing.T) {
 	to := test.TimeOut(time.Second * 20)
 	defer to.Stop()
@@ -631,9 +574,7 @@ func TestDataChannel_Dial(t *testing.T) {
 		wg.Add(2)
 
 		offerPC, answerPC, err := newPair()
-		if err != nil {
-			t.Fatalf("Failed to create a PC pair for testing")
-		}
+		assert.NoError(t, err)
 
 		answerPC.OnDataChannel(func(d *DataChannel) {
 			if d.Label() != expectedLabel {
@@ -642,7 +583,7 @@ func TestDataChannel_Dial(t *testing.T) {
 
 			d.OnDial(func() {
 				// only dialing side should fire OnDial
-				t.Fatalf("answering side should not call on dial")
+				assert.Fail(t, "answering side should not call on dial")
 			})
 
 			d.OnOpen(wg.Done)
@@ -670,9 +611,7 @@ func TestDataChannel_Dial(t *testing.T) {
 		done := make(chan bool)
 
 		offerPC, answerPC, err := newPair()
-		if err != nil {
-			t.Fatalf("Failed to create a PC pair for testing")
-		}
+		assert.NoError(t, err)
 
 		d, err := offerPC.CreateDataChannel(expectedLabel, nil)
 		assert.NoError(t, err)
@@ -701,35 +640,26 @@ func TestDetachRemovesDatachannelReference(t *testing.T) {
 	// Set up two peer connections.
 	config := Configuration{}
 	pca, err := api.NewPeerConnection(config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 	pcb, err := api.NewPeerConnection(config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	defer closePairNow(t, pca, pcb)
 
 	dcChan := make(chan *DataChannel, 1)
 	pcb.OnDataChannel(func(d *DataChannel) {
 		d.OnOpen(func() {
-			if _, detachErr := d.Detach(); detachErr != nil {
-				t.Error(detachErr)
-			}
+			_, detachErr := d.Detach()
+			assert.NoError(t, detachErr)
 
 			dcChan <- d
 		})
 	})
 
-	if err = signalPair(pca, pcb); err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, signalPair(pca, pcb))
 
 	attached, err := pca.CreateDataChannel("", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 	open := make(chan struct{}, 1)
 	attached.OnOpen(func() {
 		open <- struct{}{}
@@ -740,8 +670,233 @@ func TestDetachRemovesDatachannelReference(t *testing.T) {
 	d.sctpTransport.lock.RLock()
 	defer d.sctpTransport.lock.RUnlock()
 	for _, dc := range d.sctpTransport.dataChannels[:cap(d.sctpTransport.dataChannels)] {
-		if dc == d {
-			t.Errorf("expected sctpTransport to drop reference to datachannel")
-		}
+		assert.NotEqual(t, dc, d, "expected sctpTransport to drop reference to datachannel")
 	}
+}
+
+func TestDataChannelClose(t *testing.T) {
+	// Test if onClose is fired for self and remote after Close is called
+	t.Run("close open channels", func(t *testing.T) {
+		options := &DataChannelInit{}
+
+		offerPC, answerPC, dc, done := setUpDataChannelParametersTest(t, options)
+
+		answerPC.OnDataChannel(func(dataChannel *DataChannel) {
+			// Make sure this is the data channel we were looking for. (Not the one
+			// created in signalPair).
+			if dataChannel.Label() != expectedLabel {
+				return
+			}
+
+			dataChannel.OnOpen(func() {
+				assert.NoError(t, dataChannel.Close())
+			})
+
+			dataChannel.OnClose(func() {
+				done <- true
+			})
+		})
+
+		dc.OnClose(func() {
+			done <- true
+		})
+
+		assert.NoError(t, signalPair(offerPC, answerPC))
+
+		// Offer and Answer OnClose
+		<-done
+		<-done
+
+		assert.NoError(t, offerPC.Close())
+		assert.NoError(t, answerPC.Close())
+	})
+
+	// Test if OnClose is fired for self and remote after Close is called on non-established channel
+	// https://github.com/pion/webrtc/issues/2659
+	t.Run("Close connecting channels", func(t *testing.T) {
+		options := &DataChannelInit{}
+
+		offerPC, answerPC, dc, done := setUpDataChannelParametersTest(t, options)
+
+		answerPC.OnDataChannel(func(dataChannel *DataChannel) {
+			// Make sure this is the data channel we were looking for. (Not the one
+			// created in signalPair).
+			if dataChannel.Label() != expectedLabel {
+				return
+			}
+
+			dataChannel.OnOpen(func() {
+				assert.Fail(t, "OnOpen must not be fired after we call Close")
+			})
+
+			dataChannel.OnClose(func() {
+				done <- true
+			})
+
+			assert.NoError(t, dataChannel.Close())
+		})
+
+		dc.OnClose(func() {
+			done <- true
+		})
+
+		assert.NoError(t, signalPair(offerPC, answerPC))
+
+		// Offer and Answer OnClose
+		<-done
+		<-done
+
+		assert.NoError(t, offerPC.Close())
+		assert.NoError(t, answerPC.Close())
+	})
+}
+
+func TestDataChannel_DetachErrors(t *testing.T) {
+	t.Run("error errDetachNotEnabled", func(t *testing.T) {
+		s := SettingEngine{}
+		offer, answer, err := NewAPI(WithSettingEngine(s)).newPair(Configuration{})
+		assert.NoError(t, err)
+		dc, err := offer.CreateDataChannel("data", nil)
+		assert.NoError(t, err)
+		_, err = dc.Detach()
+		assert.ErrorIs(t, err, errDetachNotEnabled)
+		assert.NoError(t, offer.Close())
+		assert.NoError(t, answer.Close())
+	})
+
+	t.Run("error errDetachBeforeOpened", func(t *testing.T) {
+		s := SettingEngine{}
+		s.DetachDataChannels()
+		offer, answer, err := NewAPI(WithSettingEngine(s)).newPair(Configuration{})
+		assert.NoError(t, err)
+		dc, err := offer.CreateDataChannel("data", nil)
+		assert.NoError(t, err)
+		_, err = dc.Detach()
+		assert.ErrorIs(t, err, errDetachBeforeOpened)
+		assert.NoError(t, offer.Close())
+		assert.NoError(t, answer.Close())
+	})
+}
+
+func TestDataChannelMessageSize(t *testing.T) {
+	offerPC, answerPC, err := newPair()
+	assert.NoError(t, err)
+
+	dc, err := offerPC.CreateDataChannel("", nil)
+	assert.NoError(t, err)
+
+	answerDataChannelMessages := make(chan []byte)
+	answerPC.OnDataChannel(func(d *DataChannel) {
+		d.OnMessage(func(m DataChannelMessage) {
+			answerDataChannelMessages <- m.Data
+		})
+	})
+
+	assert.NoError(t, signalPair(offerPC, answerPC))
+
+	messagesSent, messagesSentCancel := context.WithCancel(context.Background())
+	dc.OnOpen(func() {
+		for i := 0; i <= 10; i++ {
+			outboundMessage := make([]byte, sctpMaxMessageSizeUnsetValue*i)
+			_, err := rand.Read(outboundMessage)
+			assert.NoError(t, err)
+
+			assert.NoError(t, dc.Send(outboundMessage))
+			inboundMessage := <-answerDataChannelMessages
+
+			assert.Equal(t, outboundMessage, inboundMessage)
+		}
+		messagesSentCancel()
+	})
+
+	<-messagesSent.Done()
+	closePairNow(t, offerPC, answerPC)
+}
+
+func TestOnBufferedAmountLowDeadlock(t *testing.T) {
+	offerPC, answerPC, err := newPair()
+	assert.NoError(t, err)
+
+	offerDataChannel, err := offerPC.CreateDataChannel("", nil)
+	assert.NoError(t, err)
+
+	assert.NoError(t, signalPair(offerPC, answerPC))
+
+	gotAllMessages, gotAllMessagesCancel := context.WithCancel(context.Background())
+	offerDataChannel.OnOpen(func() {
+		for {
+			select {
+			case <-gotAllMessages.Done():
+				return
+			case <-time.After(5 * time.Millisecond):
+				assert.NoError(t, offerDataChannel.Send([]byte{0xBE, 0xEF}))
+			}
+		}
+	})
+
+	answerPC.OnDataChannel(func(dataChannel *DataChannel) {
+		dataChannel.SetBufferedAmountLowThreshold(1)
+
+		var onBufferedAmountLowFired atomic.Bool
+		dataChannel.OnBufferedAmountLow(func() {
+			onBufferedAmountLowFired.Store(true)
+			<-gotAllMessages.Done()
+		})
+
+		var onMessageCount uint32
+		dataChannel.OnMessage(func(msg DataChannelMessage) {
+			if onBufferedAmountLowFired.Load() && atomic.AddUint32(&onMessageCount, 1) == 10 {
+				gotAllMessagesCancel()
+			}
+		})
+	})
+
+	<-gotAllMessages.Done()
+	closePairNow(t, offerPC, answerPC)
+}
+
+func TestOnBufferedAmountLowRespectsReadyState(t *testing.T) {
+	t.Run("fires when open", func(t *testing.T) {
+		dc := &DataChannel{}
+		dc.setReadyState(DataChannelStateOpen)
+
+		called := make(chan struct{}, 1)
+		dc.OnBufferedAmountLow(func() {
+			called <- struct{}{}
+		})
+
+		dc.mu.RLock()
+		handler := dc.onBufferedAmountLow
+		dc.mu.RUnlock()
+
+		handler()
+
+		select {
+		case <-called:
+		case <-time.After(time.Second):
+			assert.Fail(t, "expected OnBufferedAmountLow to fire when open")
+		}
+	})
+
+	t.Run("skips when not open", func(t *testing.T) {
+		dc := &DataChannel{}
+		dc.setReadyState(DataChannelStateClosing)
+
+		called := make(chan struct{}, 1)
+		dc.OnBufferedAmountLow(func() {
+			called <- struct{}{}
+		})
+
+		dc.mu.RLock()
+		handler := dc.onBufferedAmountLow
+		dc.mu.RUnlock()
+
+		handler()
+
+		select {
+		case <-called:
+			assert.Fail(t, "expected OnBufferedAmountLow to be ignored when not open")
+		case <-time.After(50 * time.Millisecond):
+		}
+	})
 }

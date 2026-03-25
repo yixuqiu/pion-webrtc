@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build e2e
@@ -95,7 +95,7 @@ func TestE2E_Audio(t *testing.T) {
 			var result string
 			if err := page.RunScript(
 				"pc.setRemoteDescription(JSON.parse(answer))",
-				map[string]interface{}{"answer": string(answerBytes)},
+				map[string]any{"answer": string(answerBytes)},
 				&result,
 			); err != nil {
 				t.Fatalf("Failed to run script to set SDP: %v", err)
@@ -235,7 +235,7 @@ func TestE2E_DataChannel(t *testing.T) {
 			var result string
 			if err := page.RunScript(
 				"pc.setRemoteDescription(JSON.parse(answer))",
-				map[string]interface{}{"answer": string(answerBytes)},
+				map[string]any{"answer": string(answerBytes)},
 				&result,
 			); err != nil {
 				t.Fatalf("Failed to run script to set SDP: %v", err)

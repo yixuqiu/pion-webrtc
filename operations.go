@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -6,46 +6,70 @@ package webrtc
 import (
 	"container/list"
 	"sync"
+	"sync/atomic"
 )
 
-// Operation is a function
+// Operation is a function.
 type operation func()
 
 // Operations is a task executor.
 type operations struct {
-	mu   sync.Mutex
-	busy bool
-	ops  *list.List
+	mu     sync.Mutex
+	busyCh chan struct{}
+	ops    *list.List
+
+	updateNegotiationNeededFlagOnEmptyChain *atomic.Bool
+	onNegotiationNeeded                     func()
+	isClosed                                bool
 }
 
-func newOperations() *operations {
+func newOperations(
+	updateNegotiationNeededFlagOnEmptyChain *atomic.Bool,
+	onNegotiationNeeded func(),
+) *operations {
 	return &operations{
-		ops: list.New(),
+		ops:                                     list.New(),
+		updateNegotiationNeededFlagOnEmptyChain: updateNegotiationNeededFlagOnEmptyChain,
+		onNegotiationNeeded:                     onNegotiationNeeded,
 	}
 }
 
 // Enqueue adds a new action to be executed. If there are no actions scheduled,
-// the execution will start immediately in a new goroutine.
+// the execution will start immediately in a new goroutine. If the queue has been
+// closed, the operation will be dropped. The queue is only deliberately closed
+// by a user.
 func (o *operations) Enqueue(op operation) {
-	if op == nil {
-		return
-	}
-
 	o.mu.Lock()
-	running := o.busy
-	o.ops.PushBack(op)
-	o.busy = true
-	o.mu.Unlock()
-
-	if !running {
-		go o.start()
-	}
+	defer o.mu.Unlock()
+	_ = o.tryEnqueue(op)
 }
 
-// IsEmpty checks if there are tasks in the queue
+// tryEnqueue attempts to enqueue the given operation. It returns false
+// if the op is invalid or the queue is closed. mu must be locked by
+// tryEnqueue's caller.
+func (o *operations) tryEnqueue(op operation) bool {
+	if op == nil {
+		return false
+	}
+
+	if o.isClosed {
+		return false
+	}
+	o.ops.PushBack(op)
+
+	if o.busyCh == nil {
+		o.busyCh = make(chan struct{})
+		go o.start()
+	}
+
+	return true
+}
+
+// IsEmpty checks if there are tasks in the queue.
 func (o *operations) IsEmpty() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+
 	return o.ops.Len() == 0
 }
 
@@ -54,10 +78,37 @@ func (o *operations) IsEmpty() bool {
 func (o *operations) Done() {
 	var wg sync.WaitGroup
 	wg.Add(1)
-	o.Enqueue(func() {
+	o.mu.Lock()
+	enqueued := o.tryEnqueue(func() {
 		wg.Done()
 	})
+	o.mu.Unlock()
+	if !enqueued {
+		return
+	}
 	wg.Wait()
+}
+
+// GracefulClose waits for the operations queue to be cleared and forbids
+// new operations from being enqueued.
+func (o *operations) GracefulClose() {
+	o.mu.Lock()
+	if o.isClosed {
+		o.mu.Unlock()
+
+		return
+	}
+	// do not enqueue anymore ops from here on
+	// o.isClosed=true will also not allow a new busyCh
+	// to be created.
+	o.isClosed = true
+
+	busyCh := o.busyCh
+	o.mu.Unlock()
+	if busyCh == nil {
+		return
+	}
+	<-busyCh
 }
 
 func (o *operations) pop() func() {
@@ -72,6 +123,7 @@ func (o *operations) pop() func() {
 	if op, ok := e.Value.(operation); ok {
 		return op
 	}
+
 	return nil
 }
 
@@ -79,12 +131,18 @@ func (o *operations) start() {
 	defer func() {
 		o.mu.Lock()
 		defer o.mu.Unlock()
-		if o.ops.Len() == 0 {
-			o.busy = false
+		// this wil lbe the most recent busy chan
+		close(o.busyCh)
+
+		if o.ops.Len() == 0 || o.isClosed {
+			o.busyCh = nil
+
 			return
 		}
+
 		// either a new operation was enqueued while we
 		// were busy, or an operation panicked
+		o.busyCh = make(chan struct{})
 		go o.start()
 	}()
 
@@ -93,4 +151,9 @@ func (o *operations) start() {
 		fn()
 		fn = o.pop()
 	}
+	if !o.updateNegotiationNeededFlagOnEmptyChain.Load() {
+		return
+	}
+	o.updateNegotiationNeededFlagOnEmptyChain.Store(false)
+	o.onNegotiationNeeded()
 }

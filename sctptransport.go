@@ -1,15 +1,14 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
 import (
 	"errors"
 	"io"
-	"math"
+	"net"
 	"sync"
 	"time"
 
@@ -34,10 +33,6 @@ type SCTPTransport struct {
 	// so we need a dedicated field
 	isStarted bool
 
-	// MaxMessageSize represents the maximum size of data that can be passed to
-	// DataChannel's send() method.
-	maxMessageSize float64
-
 	// MaxChannels represents the maximum amount of DataChannel's that can
 	// be used simultaneously.
 	maxChannels *uint16
@@ -45,6 +40,7 @@ type SCTPTransport struct {
 	// OnStateChange  func()
 
 	onErrorHandler func(error)
+	onCloseHandler func(error)
 
 	sctpAssociation            *sctp.Association
 	onDataChannelHandler       func(*DataChannel)
@@ -56,6 +52,8 @@ type SCTPTransport struct {
 	dataChannelsOpened    uint32
 	dataChannelsRequested uint32
 	dataChannelsAccepted  uint32
+
+	localSctpInit []byte
 
 	api *API
 	log logging.LeveledLogger
@@ -73,7 +71,6 @@ func (api *API) NewSCTPTransport(dtls *DTLSTransport) *SCTPTransport {
 		dataChannelIDsUsed: make(map[uint16]struct{}),
 	}
 
-	res.updateMessageSize()
 	res.updateMaxChannels()
 
 	return res
@@ -89,31 +86,45 @@ func (r *SCTPTransport) Transport() *DTLSTransport {
 
 // GetCapabilities returns the SCTPCapabilities of the SCTPTransport.
 func (r *SCTPTransport) GetCapabilities() SCTPCapabilities {
+	var maxMessageSize uint32
+	if a := r.association(); a != nil {
+		maxMessageSize = a.MaxMessageSize()
+	}
+
 	return SCTPCapabilities{
-		MaxMessageSize: 0,
+		MaxMessageSize: maxMessageSize,
 	}
 }
 
 // Start the SCTPTransport. Since both local and remote parties must mutually
 // create an SCTPTransport, SCTP SO (Simultaneous Open) is used to establish
 // a connection over SCTP.
-func (r *SCTPTransport) Start(SCTPCapabilities) error {
+//
+//nolint:cyclop
+func (r *SCTPTransport) Start(capabilities SCTPCapabilities) error {
 	if r.isStarted {
 		return nil
 	}
 	r.isStarted = true
 
+	maxMessageSize := capabilities.MaxMessageSize
+	if maxMessageSize == 0 {
+		maxMessageSize = sctpMaxMessageSizeUnsetValue
+	}
+	remoteSctpInit := []byte(capabilities.sctpInit)
+
 	dtlsTransport := r.Transport()
 	if dtlsTransport == nil || dtlsTransport.conn == nil {
 		return errSCTPTransportDTLS
 	}
-	sctpAssociation, err := sctp.Client(sctp.Config{
-		NetConn:              dtlsTransport.conn,
-		MaxReceiveBufferSize: r.api.settingEngine.sctp.maxReceiveBufferSize,
-		EnableZeroChecksum:   r.api.settingEngine.sctp.enableZeroChecksum,
-		LoggerFactory:        r.api.settingEngine.LoggerFactory,
-		RTOMax:               float64(r.api.settingEngine.sctp.rtoMax) / float64(time.Millisecond),
-	})
+	opts := r.sctpClientOptions(dtlsTransport.conn, maxMessageSize)
+	if len(r.localSctpInit) > 0 && len(remoteSctpInit) > 0 {
+		opts = append(
+			opts,
+			sctp.WithSNAP(r.localSctpInit, remoteSctpInit),
+		)
+	}
+	sctpAssociation, err := sctp.ClientWithOptions(opts...)
 	if err != nil {
 		return err
 	}
@@ -130,6 +141,7 @@ func (r *SCTPTransport) Start(SCTPCapabilities) error {
 			err := d.open(r)
 			if err != nil {
 				r.log.Warnf("failed to open data channel: %s", err)
+
 				continue
 			}
 			openedDCCount++
@@ -140,22 +152,68 @@ func (r *SCTPTransport) Start(SCTPCapabilities) error {
 	r.dataChannelsOpened += openedDCCount
 	r.lock.Unlock()
 
-	go r.acceptDataChannels(sctpAssociation)
+	go r.acceptDataChannels(sctpAssociation, dataChannels)
 
 	return nil
 }
 
-// Stop stops the SCTPTransport
+func (r *SCTPTransport) sctpClientOptions(netConn net.Conn, maxMessageSize uint32) []sctp.ClientOption {
+	opts := []sctp.ClientOption{
+		sctp.WithNetConn(netConn),
+		sctp.WithLoggerFactory(r.api.settingEngine.LoggerFactory),
+		sctp.WithMTU(outboundMTU),
+		sctp.WithMaxMessageSize(maxMessageSize),
+	}
+
+	return append(opts, r.optionalSCTPClientOptions()...)
+}
+
+func (r *SCTPTransport) optionalSCTPClientOptions() []sctp.ClientOption {
+	opts := make([]sctp.ClientOption, 0, 7)
+
+	if r.api.settingEngine.sctp.maxReceiveBufferSize != 0 {
+		opts = append(opts, sctp.WithMaxReceiveBufferSize(r.api.settingEngine.sctp.maxReceiveBufferSize))
+	}
+
+	if r.api.settingEngine.sctp.enableZeroChecksum {
+		opts = append(opts, sctp.WithEnableZeroChecksum(true))
+	}
+
+	if r.api.settingEngine.detach.DataChannels && r.api.settingEngine.dataChannelBlockWrite {
+		opts = append(opts, sctp.WithBlockWrite(true))
+	}
+
+	if r.api.settingEngine.sctp.rtoMax > 0 {
+		opts = append(
+			opts,
+			sctp.WithRTOMax(float64(r.api.settingEngine.sctp.rtoMax)/float64(time.Millisecond)),
+		)
+	}
+
+	if r.api.settingEngine.sctp.minCwnd != 0 {
+		opts = append(opts, sctp.WithMinCwnd(r.api.settingEngine.sctp.minCwnd))
+	}
+
+	if r.api.settingEngine.sctp.fastRtxWnd != 0 {
+		opts = append(opts, sctp.WithFastRtxWnd(r.api.settingEngine.sctp.fastRtxWnd))
+	}
+
+	if r.api.settingEngine.sctp.cwndCAStep != 0 {
+		opts = append(opts, sctp.WithCwndCAStep(r.api.settingEngine.sctp.cwndCAStep))
+	}
+
+	return opts
+}
+
+// Stop stops the SCTPTransport.
 func (r *SCTPTransport) Stop() error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	if r.sctpAssociation == nil {
 		return nil
 	}
-	err := r.sctpAssociation.Close()
-	if err != nil {
-		return err
-	}
+
+	r.sctpAssociation.Abort("")
 
 	r.sctpAssociation = nil
 	r.state = SCTPTransportStateClosed
@@ -163,10 +221,13 @@ func (r *SCTPTransport) Stop() error {
 	return nil
 }
 
-func (r *SCTPTransport) acceptDataChannels(a *sctp.Association) {
-	r.lock.RLock()
-	dataChannels := make([]*datachannel.DataChannel, 0, len(r.dataChannels))
-	for _, dc := range r.dataChannels {
+//nolint:cyclop
+func (r *SCTPTransport) acceptDataChannels(
+	assoc *sctp.Association,
+	existingDataChannels []*DataChannel,
+) {
+	dataChannels := make([]*datachannel.DataChannel, 0, len(existingDataChannels))
+	for _, dc := range existingDataChannels {
 		dc.mu.Lock()
 		isNil := dc.dataChannel == nil
 		dc.mu.Unlock()
@@ -175,17 +236,31 @@ func (r *SCTPTransport) acceptDataChannels(a *sctp.Association) {
 		}
 		dataChannels = append(dataChannels, dc.dataChannel)
 	}
-	r.lock.RUnlock()
 ACCEPT:
 	for {
-		dc, err := datachannel.Accept(a, &datachannel.Config{
+		// check if the association has been stopped before calling accept.
+		r.lock.RLock()
+		currentAssoc := r.sctpAssociation
+		shouldStop := currentAssoc == nil || currentAssoc != assoc
+		r.lock.RUnlock()
+		if shouldStop {
+			r.onClose(nil)
+
+			return
+		}
+
+		dc, err := datachannel.Accept(assoc, &datachannel.Config{
 			LoggerFactory: r.api.settingEngine.LoggerFactory,
 		}, dataChannels...)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				r.log.Errorf("Failed to accept data channel: %v", err)
 				r.onError(err)
+				r.onClose(err)
+			} else {
+				r.onClose(nil)
 			}
+
 			return
 		}
 		for _, ch := range dataChannels {
@@ -198,7 +273,7 @@ ACCEPT:
 			maxRetransmits    *uint16
 			maxPacketLifeTime *uint16
 		)
-		val := uint16(dc.Config.ReliabilityParameter)
+		val := uint16(dc.Config.ReliabilityParameter) //nolint:gosec //G115
 		ordered := true
 
 		switch dc.Config.ChannelType {
@@ -232,9 +307,14 @@ ACCEPT:
 			MaxRetransmits:    maxRetransmits,
 		}, r, r.api.settingEngine.LoggerFactory.NewLogger("ortc"))
 		if err != nil {
+			// This data channel is invalid. Close it and log an error.
+			if err1 := dc.Close(); err1 != nil {
+				r.log.Errorf("Failed to close invalid data channel: %v", err1)
+			}
 			r.log.Errorf("Failed to accept data channel: %v", err)
 			r.onError(err)
-			return
+			// We've received a datachannel with invalid configuration. We can still receive other datachannels.
+			continue ACCEPT
 		}
 
 		<-r.onDataChannel(rtcDC)
@@ -251,8 +331,7 @@ ACCEPT:
 	}
 }
 
-// OnError sets an event handler which is invoked when
-// the SCTP connection error occurs.
+// OnError sets an event handler which is invoked when the SCTP Association errors.
 func (r *SCTPTransport) OnError(f func(err error)) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
@@ -269,6 +348,23 @@ func (r *SCTPTransport) onError(err error) {
 	}
 }
 
+// OnClose sets an event handler which is invoked when the SCTP Association closes.
+func (r *SCTPTransport) OnClose(f func(err error)) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	r.onCloseHandler = f
+}
+
+func (r *SCTPTransport) onClose(err error) {
+	r.lock.RLock()
+	handler := r.onCloseHandler
+	r.lock.RUnlock()
+
+	if handler != nil {
+		go handler(err)
+	}
+}
+
 // OnDataChannel sets an event handler which is invoked when a data
 // channel message arrives from a remote peer.
 func (r *SCTPTransport) OnDataChannel(f func(*DataChannel)) {
@@ -278,7 +374,7 @@ func (r *SCTPTransport) OnDataChannel(f func(*DataChannel)) {
 }
 
 // OnDataChannelOpened sets an event handler which is invoked when a data
-// channel is opened
+// channel is opened.
 func (r *SCTPTransport) OnDataChannelOpened(f func(*DataChannel)) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
@@ -302,6 +398,7 @@ func (r *SCTPTransport) onDataChannel(dc *DataChannel) (done chan struct{}) {
 	done = make(chan struct{})
 	if handler == nil || dc == nil {
 		close(done)
+
 		return
 	}
 
@@ -313,36 +410,6 @@ func (r *SCTPTransport) onDataChannel(dc *DataChannel) (done chan struct{}) {
 	}()
 
 	return
-}
-
-func (r *SCTPTransport) updateMessageSize() {
-	r.lock.Lock()
-	defer r.lock.Unlock()
-
-	var remoteMaxMessageSize float64 = 65536 // pion/webrtc#758
-	var canSendSize float64 = 65536          // pion/webrtc#758
-
-	r.maxMessageSize = r.calcMessageSize(remoteMaxMessageSize, canSendSize)
-}
-
-func (r *SCTPTransport) calcMessageSize(remoteMaxMessageSize, canSendSize float64) float64 {
-	switch {
-	case remoteMaxMessageSize == 0 &&
-		canSendSize == 0:
-		return math.Inf(1)
-
-	case remoteMaxMessageSize == 0:
-		return canSendSize
-
-	case canSendSize == 0:
-		return remoteMaxMessageSize
-
-	case canSendSize > remoteMaxMessageSize:
-		return remoteMaxMessageSize
-
-	default:
-		return canSendSize
-	}
 }
 
 func (r *SCTPTransport) updateMaxChannels() {
@@ -362,16 +429,16 @@ func (r *SCTPTransport) MaxChannels() uint16 {
 	return *r.maxChannels
 }
 
-// State returns the current state of the SCTPTransport
+// State returns the current state of the SCTPTransport.
 func (r *SCTPTransport) State() SCTPTransportState {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
+
 	return r.state
 }
 
-func (r *SCTPTransport) collectStats(collector *statsReportCollector) {
-	collector.Collecting()
-
+// Stats reports the current statistics of the SCTPTransport.
+func (r *SCTPTransport) Stats() SCTPTransportStats {
 	stats := SCTPTransportStats{
 		Timestamp: statsTimestampFrom(time.Now()),
 		Type:      StatsTypeSCTPTransport,
@@ -388,6 +455,12 @@ func (r *SCTPTransport) collectStats(collector *statsReportCollector) {
 		stats.MTU = association.MTU()
 	}
 
+	return stats
+}
+
+func (r *SCTPTransport) collectStats(collector *statsReportCollector) {
+	collector.Collecting()
+	stats := r.Stats()
 	collector.Collect(stats.ID, stats)
 }
 
@@ -397,17 +470,18 @@ func (r *SCTPTransport) generateAndSetDataChannelID(dtlsRole DTLSRole, idOut **u
 		id++
 	}
 
-	max := r.MaxChannels()
+	maxVal := r.MaxChannels()
 
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	for ; id < max-1; id += 2 {
+	for ; id < maxVal-1; id += 2 {
 		if _, ok := r.dataChannelIDsUsed[id]; ok {
 			continue
 		}
 		*idOut = &id
 		r.dataChannelIDsUsed[id] = struct{}{}
+
 		return nil
 	}
 
@@ -421,5 +495,34 @@ func (r *SCTPTransport) association() *sctp.Association {
 	r.lock.RLock()
 	association := r.sctpAssociation
 	r.lock.RUnlock()
+
 	return association
+}
+
+// BufferedAmount returns total amount (in bytes) of currently buffered user data.
+func (r *SCTPTransport) BufferedAmount() int {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	if r.sctpAssociation == nil {
+		return 0
+	}
+
+	return r.sctpAssociation.BufferedAmount()
+}
+
+// GetSctpInit returns the current sctp-init attribute and caches the last created.
+// The caller should hold the lock.
+func (r *SCTPTransport) GetSctpInit() []byte {
+	if len(r.localSctpInit) == 0 {
+		var err error
+		r.localSctpInit, err = sctp.GenerateOutOfBandToken(sctp.Config{
+			MaxReceiveBufferSize: r.api.settingEngine.sctp.maxReceiveBufferSize,
+			EnableZeroChecksum:   r.api.settingEngine.sctp.enableZeroChecksum,
+		})
+		if err != nil {
+			r.log.Warnf("Failed to create sctp-init: %v", err)
+		}
+	}
+
+	return r.localSctpInit
 }

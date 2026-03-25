@@ -1,14 +1,14 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package rtpdump
 
 import (
-	"errors"
 	"net"
-	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestHeaderRoundTrip(t *testing.T) {
@@ -31,18 +31,11 @@ func TestHeaderRoundTrip(t *testing.T) {
 		},
 	} {
 		d, err := test.Header.Marshal()
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err)
 
 		var hdr Header
-		if err := hdr.Unmarshal(d); err != nil {
-			t.Fatal(err)
-		}
-
-		if got, want := hdr, test.Header; !reflect.DeepEqual(got, want) {
-			t.Fatalf("Unmarshal(%v.Marshal()) = %v, want identical", got, want)
-		}
+		assert.NoError(t, hdr.Unmarshal(d))
+		assert.Equal(t, test.Header, hdr)
 	}
 }
 
@@ -69,13 +62,8 @@ func TestMarshalHeader(t *testing.T) {
 		},
 	} {
 		data, err := test.Header.Marshal()
-		if got, want := err, test.WantErr; !errors.Is(got, want) {
-			t.Fatalf("Marshal(%q) err=%v, want %v", test.Name, got, want)
-		}
-
-		if got, want := data, test.Want; !reflect.DeepEqual(got, want) {
-			t.Fatalf("Marshal(%q) = %v, want %v", test.Name, got, want)
-		}
+		assert.ErrorIs(t, err, test.WantErr)
+		assert.Equal(t, test.Want, data)
 	}
 }
 
@@ -105,18 +93,12 @@ func TestPacketRoundTrip(t *testing.T) {
 			},
 		},
 	} {
-		d, err := test.Packet.Marshal()
-		if err != nil {
-			t.Fatal(err)
-		}
+		packet, err := test.Packet.Marshal()
+		assert.NoError(t, err)
 
 		var pkt Packet
-		if err := pkt.Unmarshal(d); err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, pkt.Unmarshal(packet))
 
-		if got, want := pkt, test.Packet; !reflect.DeepEqual(got, want) {
-			t.Fatalf("Unmarshal(%v.Marshal()) = %v, want identical", got, want)
-		}
+		assert.Equal(t, test.Packet, pkt)
 	}
 }

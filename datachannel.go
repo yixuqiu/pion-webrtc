@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
@@ -10,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,12 +18,11 @@ import (
 	"github.com/pion/webrtc/v4/pkg/rtcerr"
 )
 
-const dataChannelBufferSize = math.MaxUint16 // message size limit for Chromium
 var errSCTPNotEstablished = errors.New("SCTP not established")
 
 // DataChannel represents a WebRTC DataChannel
 // The DataChannel interface represents a network channel
-// which can be used for bidirectional peer-to-peer transfers of arbitrary data
+// which can be used for bidirectional peer-to-peer transfers of arbitrary data.
 type DataChannel struct {
 	mu sync.RWMutex
 
@@ -40,6 +37,8 @@ type DataChannel struct {
 	readyState                 atomic.Value // DataChannelState
 	bufferedAmountLowThreshold uint64
 	detachCalled               bool
+	readLoopActive             chan struct{}
+	isGracefulClosed           bool
 
 	// The binaryType represents attribute MUST, on getting, return the value to
 	// which it was last set. On setting, if the new value is either the string
@@ -85,13 +84,17 @@ func (api *API) NewDataChannel(transport *SCTPTransport, params *DataChannelPara
 
 // newDataChannel is an internal constructor for the data channel used to
 // create the DataChannel object before the networking is set up.
-func (api *API) newDataChannel(params *DataChannelParameters, sctpTransport *SCTPTransport, log logging.LeveledLogger) (*DataChannel, error) {
+func (api *API) newDataChannel(
+	params *DataChannelParameters,
+	sctpTransport *SCTPTransport,
+	log logging.LeveledLogger,
+) (*DataChannel, error) {
 	// https://w3c.github.io/webrtc-pc/#peer-to-peer-data-api (Step #5)
 	if len(params.Label) > 65535 {
 		return nil, &rtcerr.TypeError{Err: ErrStringSizeLimit}
 	}
 
-	d := &DataChannel{
+	dataChannel := &DataChannel{
 		sctpTransport:     sctpTransport,
 		statsID:           fmt.Sprintf("DataChannel-%d", time.Now().UnixNano()),
 		label:             params.Label,
@@ -105,12 +108,13 @@ func (api *API) newDataChannel(params *DataChannelParameters, sctpTransport *SCT
 		log:               log,
 	}
 
-	d.setReadyState(DataChannelStateConnecting)
-	return d, nil
+	dataChannel.setReadyState(DataChannelStateConnecting)
+
+	return dataChannel, nil
 }
 
-// open opens the datachannel over the sctp transport
-func (d *DataChannel) open(sctpTransport *SCTPTransport) error {
+// open opens the datachannel over the sctp transport.
+func (d *DataChannel) open(sctpTransport *SCTPTransport) error { //nolint:cyclop
 	association := sctpTransport.association()
 	if association == nil {
 		return errSCTPNotEstablished
@@ -119,6 +123,7 @@ func (d *DataChannel) open(sctpTransport *SCTPTransport) error {
 	d.mu.Lock()
 	if d.sctpTransport != nil { // already open
 		d.mu.Unlock()
+
 		return nil
 	}
 	d.sctpTransport = sctpTransport
@@ -173,6 +178,7 @@ func (d *DataChannel) open(sctpTransport *SCTPTransport) error {
 	dc, err := datachannel.Dial(association, *d.id, cfg)
 	if err != nil {
 		d.mu.Unlock()
+
 		return err
 	}
 
@@ -183,6 +189,7 @@ func (d *DataChannel) open(sctpTransport *SCTPTransport) error {
 
 	d.onDial()
 	d.handleOpen(dc, false, d.negotiated)
+
 	return nil
 }
 
@@ -195,7 +202,7 @@ func (d *DataChannel) Transport() *SCTPTransport {
 }
 
 // After onOpen is complete check that the user called detach
-// and provide an error message if the call was missed
+// and provide an error message if the call was missed.
 func (d *DataChannel) checkDetachAfterOpen() {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -225,6 +232,11 @@ func (d *DataChannel) OnOpen(f func()) {
 func (d *DataChannel) onOpen() {
 	d.mu.RLock()
 	handler := d.onOpenHandler
+	if d.isGracefulClosed {
+		d.mu.RUnlock()
+
+		return
+	}
 	d.mu.RUnlock()
 
 	if handler != nil {
@@ -236,7 +248,7 @@ func (d *DataChannel) onOpen() {
 }
 
 // OnDial sets an event handler which is invoked when the
-// peer has been dialed, but before said peer has responsed
+// peer has been dialed, but before said peer has responded.
 func (d *DataChannel) OnDial(f func()) {
 	d.mu.Lock()
 	d.dialHandlerOnce = sync.Once{}
@@ -252,6 +264,11 @@ func (d *DataChannel) OnDial(f func()) {
 func (d *DataChannel) onDial() {
 	d.mu.RLock()
 	handler := d.onDialHandler
+	if d.isGracefulClosed {
+		d.mu.RUnlock()
+
+		return
+	}
 	d.mu.RUnlock()
 
 	if handler != nil {
@@ -261,6 +278,10 @@ func (d *DataChannel) onDial() {
 
 // OnClose sets an event handler which is invoked when
 // the underlying data transport has been closed.
+// Note: Due to backwards compatibility, there is a chance that
+// OnClose can be called, even if the GracefulClose is used.
+// If this is the case for you, you can deregister OnClose
+// prior to GracefulClose.
 func (d *DataChannel) OnClose(f func()) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -292,6 +313,11 @@ func (d *DataChannel) OnMessage(f func(msg DataChannelMessage)) {
 func (d *DataChannel) onMessage(msg DataChannelMessage) {
 	d.mu.RLock()
 	handler := d.onMessageHandler
+	if d.isGracefulClosed {
+		d.mu.RUnlock()
+
+		return
+	}
 	d.mu.RUnlock()
 
 	if handler == nil {
@@ -302,6 +328,15 @@ func (d *DataChannel) onMessage(msg DataChannelMessage) {
 
 func (d *DataChannel) handleOpen(dc *datachannel.DataChannel, isRemote, isAlreadyNegotiated bool) {
 	d.mu.Lock()
+	if d.isGracefulClosed { // The channel was closed during the connecting state
+		d.mu.Unlock()
+		if err := dc.Close(); err != nil {
+			d.log.Errorf("Failed to close DataChannel that was closed during connecting state %v", err.Error())
+		}
+		d.onClose()
+
+		return
+	}
 	d.dataChannel = dc
 	bufferedAmountLowThreshold := d.bufferedAmountLowThreshold
 	onBufferedAmountLow := d.onBufferedAmountLow
@@ -326,7 +361,12 @@ func (d *DataChannel) handleOpen(dc *datachannel.DataChannel, isRemote, isAlread
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.isGracefulClosed {
+		return
+	}
+
 	if !d.api.settingEngine.detach.DataChannels {
+		d.readLoopActive = make(chan struct{})
 		go d.readLoop()
 	}
 }
@@ -342,6 +382,11 @@ func (d *DataChannel) OnError(f func(err error)) {
 func (d *DataChannel) onError(err error) {
 	d.mu.RLock()
 	handler := d.onErrorHandler
+	if d.isGracefulClosed {
+		d.mu.RUnlock()
+
+		return
+	}
 	d.mu.RUnlock()
 
 	if handler != nil {
@@ -349,37 +394,48 @@ func (d *DataChannel) onError(err error) {
 	}
 }
 
-// See https://github.com/pion/webrtc/issues/1516
-// nolint:gochecknoglobals
-var rlBufPool = sync.Pool{New: func() interface{} {
-	return make([]byte, dataChannelBufferSize)
-}}
-
 func (d *DataChannel) readLoop() {
+	defer func() {
+		d.mu.Lock()
+		readLoopActive := d.readLoopActive
+		d.mu.Unlock()
+		defer close(readLoopActive)
+	}()
+
+	buffer := make([]byte, sctpMaxMessageSizeUnsetValue)
 	for {
-		buffer := rlBufPool.Get().([]byte) //nolint:forcetypeassert
 		n, isString, err := d.dataChannel.ReadDataChannel(buffer)
 		if err != nil {
-			rlBufPool.Put(buffer) // nolint:staticcheck
+			if errors.Is(err, io.ErrShortBuffer) {
+				if int64(n) < int64(d.api.settingEngine.getSCTPMaxMessageSize()) {
+					buffer = append(buffer, make([]byte, len(buffer))...) // nolint
+
+					continue
+				}
+
+				d.log.Errorf(
+					"Incoming DataChannel message larger then Max Message size %v",
+					d.api.settingEngine.getSCTPMaxMessageSize(),
+				)
+			}
+
 			d.setReadyState(DataChannelStateClosed)
 			if !errors.Is(err, io.EOF) {
 				d.onError(err)
 			}
 			d.onClose()
+
 			return
 		}
 
-		m := DataChannelMessage{Data: make([]byte, n), IsString: isString}
-		copy(m.Data, buffer[:n])
-		// The 'staticcheck' pragma is a false positive on the part of the CI linter.
-		rlBufPool.Put(buffer) // nolint:staticcheck
-
-		// NB: Why was DataChannelMessage not passed as a pointer value?
-		d.onMessage(m) // nolint:staticcheck
+		d.onMessage(DataChannelMessage{
+			Data:     append([]byte{}, buffer[:n]...),
+			IsString: isString,
+		})
 	}
 }
 
-// Send sends the binary message to the DataChannel peer
+// Send sends the binary message to the DataChannel peer.
 func (d *DataChannel) Send(data []byte) error {
 	err := d.ensureOpen()
 	if err != nil {
@@ -387,10 +443,11 @@ func (d *DataChannel) Send(data []byte) error {
 	}
 
 	_, err = d.dataChannel.WriteDataChannel(data, false)
+
 	return err
 }
 
-// SendText sends the text message to the DataChannel peer
+// SendText sends the text message to the DataChannel peer.
 func (d *DataChannel) SendText(s string) error {
 	err := d.ensureOpen()
 	if err != nil {
@@ -398,6 +455,7 @@ func (d *DataChannel) SendText(s string) error {
 	}
 
 	_, err = d.dataChannel.WriteDataChannel([]byte(s), true)
+
 	return err
 }
 
@@ -407,11 +465,15 @@ func (d *DataChannel) ensureOpen() error {
 	if d.ReadyState() != DataChannelStateOpen {
 		return io.ErrClosedPipe
 	}
+
 	return nil
 }
 
-// Detach allows you to detach the underlying datachannel. This provides
-// an idiomatic API to work with, however it disables the OnMessage callback.
+// Detach allows you to detach the underlying datachannel.
+// This provides an idiomatic API to work with
+// (`io.ReadWriteCloser` with its `.Read()` and `.Write()` methods,
+// as opposed to `.Send()` and `.OnMessage`),
+// however it disables the OnMessage callback.
 // Before calling Detach you have to enable this behavior by calling
 // webrtc.DetachDataChannels(). Combining detached and normal data channels
 // is not supported.
@@ -419,13 +481,23 @@ func (d *DataChannel) ensureOpen() error {
 // pion/datachannel documentation for the correct way to handle the
 // resulting DataChannel object.
 func (d *DataChannel) Detach() (datachannel.ReadWriteCloser, error) {
+	return d.DetachWithDeadline()
+}
+
+// DetachWithDeadline allows you to detach the underlying datachannel.
+// It is the same as Detach but returns a ReadWriteCloserDeadliner.
+func (d *DataChannel) DetachWithDeadline() (datachannel.ReadWriteCloserDeadliner, error) {
 	d.mu.Lock()
 
 	if !d.api.settingEngine.detach.DataChannels {
+		d.mu.Unlock()
+
 		return nil, errDetachNotEnabled
 	}
 
 	if d.dataChannel == nil {
+		d.mu.Unlock()
+
 		return nil, errDetachBeforeOpened
 	}
 
@@ -439,7 +511,7 @@ func (d *DataChannel) Detach() (datachannel.ReadWriteCloser, error) {
 	d.sctpTransport.lock.Lock()
 	n := len(d.sctpTransport.dataChannels)
 	j := 0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if d == d.sctpTransport.dataChannels[i] {
 			continue
 		}
@@ -458,7 +530,32 @@ func (d *DataChannel) Detach() (datachannel.ReadWriteCloser, error) {
 // Close Closes the DataChannel. It may be called regardless of whether
 // the DataChannel object was created by this peer or the remote peer.
 func (d *DataChannel) Close() error {
+	return d.close(false)
+}
+
+// GracefulClose Closes the DataChannel. It may be called regardless of whether
+// the DataChannel object was created by this peer or the remote peer. It also waits
+// for any goroutines it started to complete. This is only safe to call outside of
+// DataChannel callbacks or if in a callback, in its own goroutine.
+func (d *DataChannel) GracefulClose() error {
+	return d.close(true)
+}
+
+// Normally, close only stops writes from happening, so graceful=true
+// will wait for reads to be finished based on underlying SCTP association
+// closure or a SCTP reset stream from the other side. This is safe to call
+// with graceful=true after tearing down a PeerConnection but not
+// necessarily before. For example, if you used a vnet and dropped all packets
+// right before closing the DataChannel, you'd need never see a reset stream.
+func (d *DataChannel) close(shouldGracefullyClose bool) error {
 	d.mu.Lock()
+	d.isGracefulClosed = true
+	readLoopActive := d.readLoopActive
+	if shouldGracefullyClose && readLoopActive != nil {
+		defer func() {
+			<-readLoopActive
+		}()
+	}
 	haveSctpTransport := d.dataChannel != nil
 	d.mu.Unlock()
 
@@ -547,6 +644,7 @@ func (d *DataChannel) ReadyState() DataChannelState {
 	if v, ok := d.readyState.Load().(DataChannelState); ok {
 		return v
 	}
+
 	return DataChannelState(0)
 }
 
@@ -567,6 +665,7 @@ func (d *DataChannel) BufferedAmount() uint64 {
 	if d.dataChannel == nil {
 		return 0
 	}
+
 	return d.dataChannel.BufferedAmount()
 }
 
@@ -583,6 +682,7 @@ func (d *DataChannel) BufferedAmountLowThreshold() uint64 {
 	if d.dataChannel == nil {
 		return d.bufferedAmountLowThreshold
 	}
+
 	return d.dataChannel.BufferedAmountLowThreshold()
 }
 
@@ -606,15 +706,30 @@ func (d *DataChannel) OnBufferedAmountLow(f func()) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.onBufferedAmountLow = f
+	onBufferedAmountLow := d.makeBufferedAmountLowHandler(f)
+	d.onBufferedAmountLow = onBufferedAmountLow
+
 	if d.dataChannel != nil {
-		d.dataChannel.OnBufferedAmountLow(f)
+		d.dataChannel.OnBufferedAmountLow(onBufferedAmountLow)
+	}
+}
+
+func (d *DataChannel) makeBufferedAmountLowHandler(f func()) func() {
+	return func() {
+		go func() {
+			if d.ReadyState() != DataChannelStateOpen {
+				return
+			}
+
+			f()
+		}()
 	}
 }
 
 func (d *DataChannel) getStatsID() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
 	return d.statsID
 }
 

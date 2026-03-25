@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
@@ -11,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/transport/v3/test"
+	"github.com/pion/transport/v4/test"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/stretchr/testify/assert"
 )
@@ -25,9 +24,6 @@ func Test_ORTC_Media(t *testing.T) {
 
 	stackA, stackB, err := newORTCPair()
 	assert.NoError(t, err)
-
-	assert.NoError(t, stackA.api.mediaEngine.RegisterDefaultCodecs())
-	assert.NoError(t, stackB.api.mediaEngine.RegisterDefaultCodecs())
 
 	assert.NoError(t, signalORTCPair(stackA, stackB))
 

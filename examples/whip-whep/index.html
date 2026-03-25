@@ -1,7 +1,7 @@
 <html>
 
   <!--
-		SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+		SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 		SPDX-License-Identifier: MIT
 	-->
   <head>
@@ -31,6 +31,7 @@
 
     window.doWHEP = () => {
       peerConnection.addTransceiver('video', { direction: 'recvonly' })
+      peerConnection.addTransceiver('audio', { direction: 'recvonly' })
 
       peerConnection.ontrack = function (event) {
         document.getElementById('videoPlayer').srcObject = event.streams[0]
@@ -57,7 +58,7 @@
     }
 
     window.doWHIP = () => {
-      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         .then(stream => {
           document.getElementById('videoPlayer').srcObject = stream
           stream.getTracks().forEach(track => peerConnection.addTrack(track, stream))

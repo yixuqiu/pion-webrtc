@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 // data-channels-flow-control demonstrates how to use the DataChannel congestion control APIs
@@ -59,18 +59,21 @@ func createOfferer() *webrtc.PeerConnection {
 	sendMoreCh := make(chan struct{}, 1)
 
 	// Create a datachannel with label 'data'
-	dc, err := pc.CreateDataChannel("data", options)
+	dataChannel, err := pc.CreateDataChannel("data", options)
 	check(err)
 
 	// Register channel opening handling
-	dc.OnOpen(func() {
-		log.Printf("OnOpen: %s-%d. Start sending a series of 1024-byte packets as fast as it can\n", dc.Label(), dc.ID())
+	dataChannel.OnOpen(func() {
+		log.Printf(
+			"OnOpen: %s-%d. Start sending a series of 1024-byte packets as fast as it can\n",
+			dataChannel.Label(), dataChannel.ID(),
+		)
 
 		for {
-			err2 := dc.Send(buf)
+			err2 := dataChannel.Send(buf)
 			check(err2)
 
-			if dc.BufferedAmount() > maxBufferedAmount {
+			if dataChannel.BufferedAmount() > maxBufferedAmount {
 				// Wait until the bufferedAmount becomes lower than the threshold
 				<-sendMoreCh
 			}
@@ -79,12 +82,10 @@ func createOfferer() *webrtc.PeerConnection {
 
 	// Set bufferedAmountLowThreshold so that we can get notified when
 	// we can send more
-	dc.SetBufferedAmountLowThreshold(bufferedAmountLowThreshold)
+	dataChannel.SetBufferedAmountLowThreshold(bufferedAmountLowThreshold)
 
 	// This callback is made when the current bufferedAmount becomes lower than the threshold
-	dc.OnBufferedAmountLow(func() {
-		// Make sure to not block this channel or perform long running operations in this callback
-		// This callback is executed by pion/sctp. If this callback is blocking it will stop operations
+	dataChannel.OnBufferedAmountLow(func() {
 		select {
 		case sendMoreCh <- struct{}{}:
 		default:
@@ -104,23 +105,25 @@ func createAnswerer() *webrtc.PeerConnection {
 	pc, err := webrtc.NewPeerConnection(config)
 	check(err)
 
-	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
+	pc.OnDataChannel(func(dataChannel *webrtc.DataChannel) {
 		var totalBytesReceived uint64
 
 		// Register channel opening handling
-		dc.OnOpen(func() {
-			log.Printf("OnOpen: %s-%d. Start receiving data", dc.Label(), dc.ID())
+		dataChannel.OnOpen(func() {
+			log.Printf("OnOpen: %s-%d. Start receiving data", dataChannel.Label(), dataChannel.ID())
 			since := time.Now()
 
 			// Start printing out the observed throughput
-			for range time.NewTicker(1000 * time.Millisecond).C {
+			ticker := time.NewTicker(1000 * time.Millisecond)
+			defer ticker.Stop()
+			for range ticker.C {
 				bps := float64(atomic.LoadUint64(&totalBytesReceived)*8) / time.Since(since).Seconds()
 				log.Printf("Throughput: %.03f Mbps", bps/1024/1024)
 			}
 		})
 
 		// Register the OnMessage to handle incoming messages
-		dc.OnMessage(func(dcMsg webrtc.DataChannelMessage) {
+		dataChannel.OnMessage(func(dcMsg webrtc.DataChannelMessage) {
 			n := len(dcMsg.Data)
 			atomic.AddUint64(&totalBytesReceived, uint64(n))
 		})
@@ -146,34 +149,35 @@ func main() {
 
 	// Set ICE Candidate handler. As soon as a PeerConnection has gathered a candidate
 	// send it to the other peer
-	answerPC.OnICECandidate(func(i *webrtc.ICECandidate) {
-		if i != nil {
-			check(offerPC.AddICECandidate(i.ToJSON()))
+	answerPC.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate != nil {
+			check(offerPC.AddICECandidate(candidate.ToJSON()))
 		}
 	})
 
 	// Set ICE Candidate handler. As soon as a PeerConnection has gathered a candidate
 	// send it to the other peer
-	offerPC.OnICECandidate(func(i *webrtc.ICECandidate) {
-		if i != nil {
-			check(answerPC.AddICECandidate(i.ToJSON()))
+	offerPC.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate != nil {
+			check(answerPC.AddICECandidate(candidate.ToJSON()))
 		}
 	})
 
 	// Set the handler for Peer connection state
 	// This will notify you when the peer has connected/disconnected
-	offerPC.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		fmt.Printf("Peer Connection State has changed: %s (offerer)\n", s.String())
+	offerPC.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		fmt.Printf("Peer Connection State has changed: %s (offerer)\n", state.String())
 
-		if s == webrtc.PeerConnectionStateFailed {
-			// Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
+		if state == webrtc.PeerConnectionStateFailed {
+			// Wait until PeerConnection has had no network activity for 30 seconds or another failure.
+			// It may be reconnected using an ICE Restart.
 			// Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
 			// Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
 			fmt.Println("Peer Connection has gone to failed exiting")
 			os.Exit(0)
 		}
 
-		if s == webrtc.PeerConnectionStateClosed {
+		if state == webrtc.PeerConnectionStateClosed {
 			// PeerConnection was explicitly closed. This usually happens from a DTLS CloseNotify
 			fmt.Println("Peer Connection has gone to closed exiting")
 			os.Exit(0)
@@ -182,18 +186,19 @@ func main() {
 
 	// Set the handler for Peer connection state
 	// This will notify you when the peer has connected/disconnected
-	answerPC.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		fmt.Printf("Peer Connection State has changed: %s (answerer)\n", s.String())
+	answerPC.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		fmt.Printf("Peer Connection State has changed: %s (answerer)\n", state.String())
 
-		if s == webrtc.PeerConnectionStateFailed {
-			// Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
+		if state == webrtc.PeerConnectionStateFailed {
+			// Wait until PeerConnection has had no network activity for 30 seconds or another failure.
+			// It may be reconnected using an ICE Restart.
 			// Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
 			// Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
 			fmt.Println("Peer Connection has gone to failed exiting")
 			os.Exit(0)
 		}
 
-		if s == webrtc.PeerConnectionStateClosed {
+		if state == webrtc.PeerConnectionStateClosed {
 			// PeerConnection was explicitly closed. This usually happens from a DTLS CloseNotify
 			fmt.Println("Peer Connection has gone to closed exiting")
 			os.Exit(0)

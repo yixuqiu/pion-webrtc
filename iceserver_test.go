@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
@@ -10,7 +9,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/pion/stun/v2"
+	"github.com/pion/stun/v3"
 	"github.com/pion/webrtc/v4/pkg/rtcerr"
 	"github.com/stretchr/testify/assert"
 )
@@ -36,7 +35,7 @@ func TestICEServer_validate(t *testing.T) {
 			{ICEServer{
 				URLs:     []string{"turn:192.158.29.39?transport=udp"},
 				Username: "unittest",
-				Credential: OAuthCredential{
+				Credential: OAuthCredential{ //nolint:gosec // not hardcoded credentials.
 					MACKey:      "WmtzanB3ZW9peFhtdm42NzUzNG0=",
 					AccessToken: "AAwg3kPHWPfvk9bDFL936wYvkoctMADzQ5VhNDgeMR3+ZlZ35byg972fW8QjpEl7bx91YLBPFsIhsxloWcXPhA==",
 				},
@@ -99,6 +98,7 @@ func TestICEServer_validate(t *testing.T) {
 		}
 	})
 	t.Run("JsonFailure", func(t *testing.T) {
+		//nolint:lll
 		testCases := [][]byte{
 			[]byte(`{"urls":"NOTAURL","username":"unittest","credential":"placeholder","credentialType":"password"}`),
 			[]byte(`{"urls":["turn:[2001:db8:1234:5678::1]?transport=udp"],"username":"unittest","credential":"placeholder","credentialType":"invalid"}`),

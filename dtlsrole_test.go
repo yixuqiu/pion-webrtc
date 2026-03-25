@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -31,12 +31,11 @@ func TestDTLSRole_String(t *testing.T) {
 	}
 }
 
-func TestDTLSRoleFromRemoteSDP(t *testing.T) {
+func TestDTLSRoleFromSDP(t *testing.T) {
 	parseSDP := func(raw string) *sdp.SessionDescription {
 		parsed := &sdp.SessionDescription{}
-		if err := parsed.Unmarshal([]byte(raw)); err != nil {
-			panic(err)
-		}
+		assert.NoError(t, parsed.Unmarshal([]byte(raw)))
+
 		return parsed
 	}
 
@@ -78,7 +77,7 @@ a=setup:%s
 	for _, testCase := range testCases {
 		assert.Equal(t,
 			testCase.expectedRole,
-			dtlsRoleFromRemoteSDP(testCase.sessionDescription),
+			dtlsRoleFromSDP(testCase.sessionDescription),
 			"TestDTLSRoleFromSDP (%s)", testCase.test,
 		)
 	}

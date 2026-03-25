@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ivfwriter
@@ -215,15 +215,18 @@ func TestIVFWriter_VP8(t *testing.T) {
 	// Third test tries to write a valid VP8 packet - No Keyframe
 	assert.False(addPacketTestCase[0].writer.seenKeyFrame, "Writer's seenKeyFrame should remain false")
 	assert.Equal(uint64(0), addPacketTestCase[0].writer.count, "Writer's packet count should remain 0")
-	assert.Equal(nil, addPacketTestCase[0].writer.WriteRTP(midPartPacket), "Write packet failed") // add a mid partition packet
+	// add a mid partition packet
+	assert.Equal(nil, addPacketTestCase[0].writer.WriteRTP(midPartPacket), "Write packet failed")
 	assert.Equal(uint64(0), addPacketTestCase[0].writer.count, "Writer's packet count should remain 0")
 
 	// Fifth test tries to write a keyframe packet
 	assert.True(addPacketTestCase[1].writer.seenKeyFrame, "Writer's seenKeyFrame should now be true")
 	assert.Equal(uint64(1), addPacketTestCase[1].writer.count, "Writer's packet count should now be 1")
-	assert.Equal(nil, addPacketTestCase[1].writer.WriteRTP(midPartPacket), "Write packet failed") // add a mid partition packet
+	// add a mid partition packet
+	assert.Equal(nil, addPacketTestCase[1].writer.WriteRTP(midPartPacket), "Write packet failed")
 	assert.Equal(uint64(1), addPacketTestCase[1].writer.count, "Writer's packet count should remain 1")
-	assert.Equal(nil, addPacketTestCase[1].writer.WriteRTP(validPacket), "Write packet failed") // add a valid packet
+	// add a valid packet
+	assert.Equal(nil, addPacketTestCase[1].writer.WriteRTP(validPacket), "Write packet failed")
 	assert.Equal(uint64(2), addPacketTestCase[1].writer.count, "Writer's packet count should now be 2")
 
 	for _, t := range addPacketTestCase {
@@ -260,15 +263,22 @@ func TestIVFWriter_AV1(t *testing.T) {
 		writer, err := NewWith(buffer, WithCodec(mimeTypeAV1))
 		assert.NoError(t, err)
 
-		assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{0x00, 0x01, 0xFF}}))
+		assert.NoError(
+			t,
+			writer.WriteRTP(
+				&rtp.Packet{
+					Header: rtp.Header{Marker: true},
+					// N = 1, Length = 1, OBU_TYPE = 4
+					Payload: []byte{0x08, 0x01, 0x20},
+				}),
+		)
+
 		assert.NoError(t, writer.Close())
 		assert.Equal(t, buffer.Bytes(), []byte{
-			0x44, 0x4b, 0x49, 0x46, 0x0, 0x0, 0x20,
-			0x0, 0x41, 0x56, 0x30, 0x31, 0x80, 0x2,
-			0xe0, 0x1, 0x1e, 0x0, 0x0, 0x0, 0x1, 0x0,
-			0x0, 0x0, 0x84, 0x3, 0x0, 0x0, 0x0, 0x0,
-			0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-			0x0, 0x0, 0x0, 0x0, 0x0, 0xff,
+			0x44, 0x4b, 0x49, 0x46, 0x0, 0x0, 0x20, 0x0, 0x41, 0x56, 0x30, 0x31,
+			0x80, 0x2, 0xe0, 0x1, 0x1e, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x84,
+			0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x4, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+			0x0, 0x0, 0x0, 0x0, 0x0, 0x12, 0x0, 0x22, 0x0,
 		})
 	})
 
@@ -278,8 +288,13 @@ func TestIVFWriter_AV1(t *testing.T) {
 		writer, err := NewWith(buffer, WithCodec(mimeTypeAV1))
 		assert.NoError(t, err)
 
-		for _, p := range [][]byte{{0x40, 0x02, 0x00, 0x01}, {0xc0, 0x02, 0x02, 0x03}, {0xc0, 0x02, 0x04, 0x04}} {
-			assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: p}))
+		for _, p := range [][]byte{
+			{0x48, 0x02, 0x00, 0x01}, // Y=true
+			{0xc0, 0x02, 0x02, 0x03}, // Z=true, Y=true
+			{0xc0, 0x02, 0x04, 0x04}, // Z=true, Y=true
+			{0x80, 0x01, 0x05},       // Z=true, Y=false (But we still don't set Marker to true)
+		} {
+			assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: p, Header: rtp.Header{Marker: false}}))
 			assert.Equal(t, buffer.Bytes(), []byte{
 				0x44, 0x4b, 0x49, 0x46, 0x0,
 				0x0, 0x20, 0x0, 0x41, 0x56, 0x30,
@@ -289,13 +304,295 @@ func TestIVFWriter_AV1(t *testing.T) {
 				0x0, 0x0,
 			})
 		}
-		assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{0x80, 0x01, 0x05}}))
+		assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{0x08, 0x01, 0x20}, Header: rtp.Header{Marker: true}}))
 		assert.Equal(t, buffer.Bytes(), []byte{
-			0x44, 0x4b, 0x49, 0x46, 0x0, 0x0, 0x20, 0x0, 0x41, 0x56, 0x30, 0x31, 0x80,
-			0x2, 0xe0, 0x1, 0x1e, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x84, 0x3, 0x0, 0x0,
-			0x0, 0x0, 0x0, 0x0, 0x7, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-			0x0, 0x1, 0x2, 0x3, 0x4, 0x4, 0x5,
+			0x44, 0x4b, 0x49, 0x46, 0x0, 0x0, 0x20, 0x0, 0x41, 0x56, 0x30, 0x31, 0x80, 0x2, 0xe0, 0x1, 0x1e,
+			0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x84, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xc, 0x0, 0x0, 0x0,
+			0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x12, 0x0, 0x2, 0x6, 0x1, 0x2, 0x3, 0x4, 0x4, 0x5, 0x22, 0x0,
 		})
 		assert.NoError(t, writer.Close())
 	})
+
+	t.Run("Invalid OBU", func(t *testing.T) {
+		buffer := &bytes.Buffer{}
+
+		writer, err := NewWith(buffer, WithCodec(mimeTypeAV1))
+		assert.NoError(t, err)
+
+		assert.Error(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{0x08, 0x02, 0xff}}))
+		assert.Error(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{0x08, 0x01, 0xff}}))
+	})
+
+	t.Run("Skips middle sequence start", func(t *testing.T) {
+		buffer := &bytes.Buffer{}
+
+		writer, err := NewWith(buffer, WithCodec(mimeTypeAV1))
+		assert.NoError(t, err)
+
+		assert.NoError(t, writer.WriteRTP(&rtp.Packet{Header: rtp.Header{Marker: true}, Payload: []byte{0x00, 0x01, 0x20}}))
+
+		assert.NoError(
+			t,
+			writer.WriteRTP(
+				&rtp.Packet{
+					Header: rtp.Header{Marker: true},
+					// N = 1, Length = 1, OBU_TYPE = 4
+					Payload: []byte{0x08, 0x01, 0x20},
+				},
+			),
+		)
+
+		assert.NoError(t, writer.Close())
+		assert.Equal(t, buffer.Bytes(), []byte{
+			0x44, 0x4b, 0x49, 0x46, 0x0, 0x0, 0x20, 0x0, 0x41, 0x56, 0x30, 0x31,
+			0x80, 0x2, 0xe0, 0x1, 0x1e, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x84,
+			0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x4, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+			0x0, 0x0, 0x0, 0x0, 0x0, 0x12, 0x0, 0x22, 0x0,
+		})
+	})
+}
+
+func TestIVFWriter_VP9(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	writer, err := NewWith(buffer, WithCodec(mimeTypeVP9))
+	assert.NoError(t, err)
+
+	// No keyframe yet, ignore non-keyframe packets (P)
+	assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{0xD0, 0x02, 0xAA}}))
+	assert.Equal(t, buffer.Bytes(), []byte{
+		0x44, 0x4b, 0x49, 0x46, 0x00, 0x00, 0x20, 0x00, 0x56, 0x50, 0x39, 0x30, 0x80, 0x02, 0xe0, 0x01,
+		0x1e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x84, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	})
+
+	// No current frame, ignore packets that don't start a frame (B)
+	assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{0x00, 0xAA}}))
+	assert.Equal(t, buffer.Bytes(), []byte{
+		0x44, 0x4b, 0x49, 0x46, 0x00, 0x00, 0x20, 0x00, 0x56, 0x50, 0x39, 0x30, 0x80, 0x02, 0xe0, 0x01,
+		0x1e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x84, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	})
+
+	// B packet, no marker bit
+	assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{0x08, 0xAA}}))
+	assert.Equal(t, buffer.Bytes(), []byte{
+		0x44, 0x4b, 0x49, 0x46, 0x00, 0x00, 0x20, 0x00, 0x56, 0x50, 0x39, 0x30, 0x80, 0x02, 0xe0, 0x01,
+		0x1e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x84, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	})
+
+	// B packet, Marker Bit
+	assert.NoError(t, writer.WriteRTP(&rtp.Packet{Header: rtp.Header{Marker: true}, Payload: []byte{0x08, 0xAB}}))
+	assert.Equal(t, buffer.Bytes(), []byte{
+		0x44, 0x4b, 0x49, 0x46, 0x00, 0x00, 0x20, 0x00, 0x56, 0x50, 0x39, 0x30, 0x80, 0x02, 0xe0, 0x01,
+		0x1e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x84, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xaa, 0xab,
+	})
+}
+
+func TestIVFWriter_WithWidthAndHeight(t *testing.T) {
+	buffer := &bytes.Buffer{}
+
+	writer, err := NewWith(buffer, WithWidthAndHeight(789, 652))
+	assert.NoError(t, err)
+
+	assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{}}))
+	assert.NoError(t, writer.Close())
+
+	assert.Equal(t, []byte{
+		0x44, 0x4b, 0x49, 0x46, 0x00, 0x00, 0x20, 0x00, 0x56, 0x50, 0x38, 0x30, 0x15, 0x03, 0x8c, 0x02,
+		0x1e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x84, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	}, buffer.Bytes())
+}
+
+func TestIVFWriter_WithFrameRate(t *testing.T) {
+	buffer := &bytes.Buffer{}
+
+	writer, err := NewWith(buffer, WithFrameRate(60, 1))
+	assert.NoError(t, err)
+
+	assert.NoError(t, writer.WriteRTP(&rtp.Packet{Payload: []byte{}}))
+	assert.NoError(t, writer.Close())
+
+	assert.Equal(t, []byte{
+		0x44, 0x4b, 0x49, 0x46, 0x00, 0x00, 0x20, 0x00, 0x56, 0x50, 0x38, 0x30, 0x80, 0x02, 0xe0, 0x01,
+		0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00, 0x00, 0x84, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	}, buffer.Bytes())
+}
+
+func TestIVFWriter_WithDirectPTS(t *testing.T) {
+	buffer := &bytes.Buffer{}
+
+	writer, err := NewWith(buffer, WithFrameRate(1, 90000), WithDirectPTS())
+	assert.NoError(t, err)
+	assert.True(t, writer.directPTS)
+	assert.Equal(t, uint32(1), writer.timebaseNumerator)
+	assert.Equal(t, uint32(90000), writer.timebaseDenominator)
+
+	assert.NoError(t, writer.Close())
+}
+
+func TestIVFWriter_DirectPTS_VP8(t *testing.T) {
+	buffer := &bytes.Buffer{}
+
+	writer, err := NewWith(buffer, WithCodec(mimeTypeVP8), WithFrameRate(1, 90000), WithDirectPTS())
+	assert.NoError(t, err)
+
+	// Write keyframe with timestamp 0.
+	keyframePacket := &rtp.Packet{
+		Header: rtp.Header{
+			Marker:    true,
+			Timestamp: 0,
+		},
+		// VP8 keyframe: S=1, P=0
+		Payload: []byte{0x10, 0x00, 0x00, 0x9d, 0x01, 0x2a},
+	}
+	assert.NoError(t, writer.WriteRTP(keyframePacket))
+	assert.Equal(t, uint64(1), writer.count)
+
+	// Write second frame with timestamp 6000 (15fps at 90kHz clock).
+	frame2 := &rtp.Packet{
+		Header: rtp.Header{
+			Marker:    true,
+			Timestamp: 6000,
+		},
+		// VP8 interframe: S=1, P=1
+		Payload: []byte{0x10, 0x01, 0x00, 0x9d, 0x01, 0x2a},
+	}
+	assert.NoError(t, writer.WriteRTP(frame2))
+	assert.Equal(t, uint64(2), writer.count)
+
+	// Write third frame with timestamp 12000.
+	frame3 := &rtp.Packet{
+		Header: rtp.Header{
+			Marker:    true,
+			Timestamp: 12000,
+		},
+		Payload: []byte{0x10, 0x01, 0x00, 0x9d, 0x01, 0x2a},
+	}
+	assert.NoError(t, writer.WriteRTP(frame3))
+	assert.Equal(t, uint64(3), writer.count)
+
+	assert.NoError(t, writer.Close())
+
+	// Verify IVF structure.
+	data := buffer.Bytes()
+	assert.True(t, len(data) > 32, "Buffer should contain header + frames")
+
+	// Check IVF header timebase (offset 16-20: denominator, offset 20-24: numerator).
+	timebaseDenom := uint32(data[16]) | uint32(data[17])<<8 | uint32(data[18])<<16 | uint32(data[19])<<24
+	timebaseNum := uint32(data[20]) | uint32(data[21])<<8 | uint32(data[22])<<16 | uint32(data[23])<<24
+	assert.Equal(t, uint32(90000), timebaseDenom)
+	assert.Equal(t, uint32(1), timebaseNum)
+
+	// Verify PTS values in frame headers.
+	// Frame 1: PTS should be 0.
+	pts1 := uint64(data[36]) | uint64(data[37])<<8 | uint64(data[38])<<16 | uint64(data[39])<<24 |
+		uint64(data[40])<<32 | uint64(data[41])<<40 | uint64(data[42])<<48 | uint64(data[43])<<56
+	assert.Equal(t, uint64(0), pts1, "First frame PTS should be 0")
+
+	// Frame 2: PTS should be 6000 (RTP timestamp directly).
+	frameSize1 := uint32(data[32]) | uint32(data[33])<<8 | uint32(data[34])<<16 | uint32(data[35])<<24
+	frame2Offset := 32 + 12 + int(frameSize1)
+	pts2 := uint64(data[frame2Offset+4]) | uint64(data[frame2Offset+5])<<8 |
+		uint64(data[frame2Offset+6])<<16 | uint64(data[frame2Offset+7])<<24 |
+		uint64(data[frame2Offset+8])<<32 | uint64(data[frame2Offset+9])<<40 |
+		uint64(data[frame2Offset+10])<<48 | uint64(data[frame2Offset+11])<<56
+	assert.Equal(t, uint64(6000), pts2, "Second frame PTS should be 6000")
+}
+
+func TestIVFWriter_DirectPTS_Precision(t *testing.T) {
+	buffer := &bytes.Buffer{}
+
+	writer, err := NewWith(buffer, WithCodec(mimeTypeVP8), WithFrameRate(1, 90000), WithDirectPTS())
+	assert.NoError(t, err)
+
+	// Simulate 15fps video (6000 RTP ticks per frame at 90kHz).
+	// 225 frames = 15 seconds.
+	timestamps := make([]uint32, 225)
+	for idx := range timestamps {
+		timestamps[idx] = uint32(idx) * 6000 //nolint:gosec // Test code with known safe values.
+	}
+
+	for idx, ts := range timestamps {
+		packet := &rtp.Packet{
+			Header: rtp.Header{
+				Marker:    true,
+				Timestamp: ts,
+			},
+			// VP8 keyframe for first, interframe for rest.
+			Payload: []byte{0x10, 0x00, 0x00, 0x9d, 0x01, 0x2a},
+		}
+		if idx > 0 {
+			packet.Payload[1] = 0x01 // Set non-keyframe flag.
+		}
+		assert.NoError(t, writer.WriteRTP(packet))
+	}
+
+	assert.NoError(t, writer.Close())
+
+	// Verify frame count.
+	assert.Equal(t, uint64(225), writer.count)
+
+	// Verify last frame PTS is exactly 224 * 6000 = 1344000.
+	data := buffer.Bytes()
+	offset := 32 // Start after IVF header.
+
+	var lastPTS uint64
+	for range 225 {
+		frameSize := uint32(data[offset]) | uint32(data[offset+1])<<8 |
+			uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
+		lastPTS = uint64(data[offset+4]) | uint64(data[offset+5])<<8 |
+			uint64(data[offset+6])<<16 | uint64(data[offset+7])<<24 |
+			uint64(data[offset+8])<<32 | uint64(data[offset+9])<<40 |
+			uint64(data[offset+10])<<48 | uint64(data[offset+11])<<56
+		offset += 12 + int(frameSize)
+	}
+
+	// Last frame should have PTS = 224 * 6000 = 1344000.
+	assert.Equal(t, uint64(224*6000), lastPTS, "Last frame PTS should be exactly 1344000")
+}
+
+func TestIVFWriter_BackwardCompatibility(t *testing.T) {
+	// Test that default behavior (without WithDirectPTS) remains unchanged.
+	buffer := &bytes.Buffer{}
+
+	writer, err := NewWith(buffer, WithCodec(mimeTypeVP8))
+	assert.NoError(t, err)
+	assert.False(t, writer.directPTS, "Default should not use direct PTS mode")
+
+	// Write keyframe.
+	keyframePacket := &rtp.Packet{
+		Header: rtp.Header{
+			Marker:    true,
+			Timestamp: 90000, // 1 second at 90kHz.
+		},
+		Payload: []byte{0x10, 0x00, 0x00, 0x9d, 0x01, 0x2a},
+	}
+	assert.NoError(t, writer.WriteRTP(keyframePacket))
+
+	// Write second frame at 2 seconds.
+	frame2 := &rtp.Packet{
+		Header: rtp.Header{
+			Marker:    true,
+			Timestamp: 180000, // 2 seconds at 90kHz.
+		},
+		Payload: []byte{0x10, 0x01, 0x00, 0x9d, 0x01, 0x2a},
+	}
+	assert.NoError(t, writer.WriteRTP(frame2))
+	assert.NoError(t, writer.Close())
+
+	// Verify PTS uses millisecond conversion (legacy behavior).
+	data := buffer.Bytes()
+
+	// First frame PTS should be 0.
+	pts1 := uint64(data[36]) | uint64(data[37])<<8 | uint64(data[38])<<16 | uint64(data[39])<<24 |
+		uint64(data[40])<<32 | uint64(data[41])<<40 | uint64(data[42])<<48 | uint64(data[43])<<56
+	assert.Equal(t, uint64(0), pts1)
+
+	// Second frame: (180000-90000)/90000 * 1000 = 1000ms, then 1000 * 1 / 30 = 33 PTS.
+	frameSize1 := uint32(data[32]) | uint32(data[33])<<8 | uint32(data[34])<<16 | uint32(data[35])<<24
+	frame2Offset := 32 + 12 + int(frameSize1)
+	pts2 := uint64(data[frame2Offset+4]) | uint64(data[frame2Offset+5])<<8 |
+		uint64(data[frame2Offset+6])<<16 | uint64(data[frame2Offset+7])<<24 |
+		uint64(data[frame2Offset+8])<<32 | uint64(data[frame2Offset+9])<<40 |
+		uint64(data[frame2Offset+10])<<48 | uint64(data[frame2Offset+11])<<56
+	assert.Equal(t, uint64(33), pts2, "Legacy mode: PTS should be 33 (1000ms * 1/30)")
 }

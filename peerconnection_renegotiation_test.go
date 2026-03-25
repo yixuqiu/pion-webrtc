@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
@@ -19,7 +18,7 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
-	"github.com/pion/transport/v3/test"
+	"github.com/pion/transport/v4/test"
 	"github.com/pion/webrtc/v4/internal/util"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/rtcerr"
@@ -27,12 +26,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func sendVideoUntilDone(done <-chan struct{}, t *testing.T, tracks []*TrackLocalStaticSample) {
+func sendVideoUntilDone(t *testing.T, done <-chan struct{}, tracks []*TrackLocalStaticSample) {
+	t.Helper()
+
 	for {
 		select {
 		case <-time.After(20 * time.Millisecond):
 			for _, track := range tracks {
-				assert.NoError(t, track.WriteSample(media.Sample{Data: []byte{0x00}, Duration: time.Second}))
+				assert.NoError(t, track.WriteSample(media.Sample{Data: []byte{0x00}, Duration: 20 * time.Millisecond}))
 			}
 		case <-done:
 			return
@@ -64,6 +65,7 @@ func sdpMidHasSsrc(offer SessionDescription, mid string, ssrc SSRC) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -89,7 +91,6 @@ func TestPeerConnection_Renegotiation_AddRecvonlyTransceiver(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			lim := test.TimeOut(time.Second * 30)
 			defer lim.Stop()
@@ -98,9 +99,7 @@ func TestPeerConnection_Renegotiation_AddRecvonlyTransceiver(t *testing.T) {
 			defer report()
 
 			pcOffer, pcAnswer, err := newPair()
-			if err != nil {
-				t.Fatal(err)
-			}
+			assert.NoError(t, err)
 
 			_, err = pcOffer.AddTransceiverFromKind(
 				RTPCodecTypeVideo,
@@ -139,19 +138,18 @@ func TestPeerConnection_Renegotiation_AddRecvonlyTransceiver(t *testing.T) {
 				assert.NoError(t, signalPair(pcOffer, pcAnswer))
 			}
 
-			sendVideoUntilDone(onTrackFired.Done(), t, []*TrackLocalStaticSample{localTrack})
+			sendVideoUntilDone(t, onTrackFired.Done(), []*TrackLocalStaticSample{localTrack})
 
 			closePairNow(t, pcOffer, pcAnswer)
 		})
 	}
 }
 
-/*
-*  Assert the following behaviors
-* - We are able to call AddTrack after signaling
-* - OnTrack is NOT called on the other side until after SetRemoteDescription
-* - We are able to re-negotiate and AddTrack is properly called
- */
+//	Assert the following behaviors
+//
+// - We are able to call AddTrack after signaling
+// - OnTrack is NOT called on the other side until after SetRemoteDescription
+// - We are able to re-negotiate and AddTrack is properly called.
 func TestPeerConnection_Renegotiation_AddTrack(t *testing.T) {
 	lim := test.TimeOut(time.Second * 30)
 	defer lim.Stop()
@@ -160,22 +158,21 @@ func TestPeerConnection_Renegotiation_AddTrack(t *testing.T) {
 	defer report()
 
 	pcOffer, pcAnswer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
-	haveRenegotiated := &atomicBool{}
+	haveRenegotiated := &atomic.Bool{}
 	onTrackFired, onTrackFiredFunc := context.WithCancel(context.Background())
 	pcAnswer.OnTrack(func(*TrackRemote, *RTPReceiver) {
-		if !haveRenegotiated.get() {
-			t.Fatal("OnTrack was called before renegotiation")
-		}
+		assert.True(t, haveRenegotiated.Load(), "OnTrack was called before renegotiation")
 		onTrackFiredFunc()
 	})
 
 	assert.NoError(t, signalPair(pcOffer, pcAnswer))
 
-	_, err = pcAnswer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly})
+	_, err = pcAnswer.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly},
+	)
 	assert.NoError(t, err)
 
 	vp8Track, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeVP8}, "foo", "bar")
@@ -190,7 +187,7 @@ func TestPeerConnection_Renegotiation_AddTrack(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	haveRenegotiated.set(true)
+	haveRenegotiated.Store(true)
 	assert.False(t, sender.isNegotiated())
 	offer, err := pcOffer.CreateOffer(nil)
 	assert.True(t, sender.isNegotiated())
@@ -210,15 +207,18 @@ func TestPeerConnection_Renegotiation_AddTrack(t *testing.T) {
 	pcOffer.ops.Done()
 	assert.Equal(t, 1, len(vp8Track.rtpTrack.bindings))
 
-	sendVideoUntilDone(onTrackFired.Done(), t, []*TrackLocalStaticSample{vp8Track})
+	sendVideoUntilDone(t, onTrackFired.Done(), []*TrackLocalStaticSample{vp8Track})
 
 	closePairNow(t, pcOffer, pcAnswer)
 }
 
-// Assert that adding tracks across multiple renegotiations performs as expected
+// Assert that adding tracks across multiple renegotiations performs as expected.
 func TestPeerConnection_Renegotiation_AddTrack_Multiple(t *testing.T) {
 	addTrackWithLabel := func(trackID string, pcOffer, pcAnswer *PeerConnection) *TrackLocalStaticSample {
-		_, err := pcAnswer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly})
+		_, err := pcAnswer.AddTransceiverFromKind(
+			RTPCodecTypeVideo,
+			RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly},
+		)
 		assert.NoError(t, err)
 
 		track, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeVP8}, trackID, trackID)
@@ -242,9 +242,7 @@ func TestPeerConnection_Renegotiation_AddTrack_Multiple(t *testing.T) {
 	defer report()
 
 	pcOffer, pcAnswer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	pcAnswer.OnTrack(func(track *TrackRemote, _ *RTPReceiver) {
 		onTrackCount[track.ID()]++
@@ -256,7 +254,7 @@ func TestPeerConnection_Renegotiation_AddTrack_Multiple(t *testing.T) {
 	for i := range trackIDs {
 		outboundTracks = append(outboundTracks, addTrackWithLabel(trackIDs[i], pcOffer, pcAnswer))
 		assert.NoError(t, signalPair(pcOffer, pcAnswer))
-		sendVideoUntilDone(onTrackChan, t, outboundTracks)
+		sendVideoUntilDone(t, onTrackChan, outboundTracks)
 	}
 
 	closePairNow(t, pcOffer, pcAnswer)
@@ -281,22 +279,21 @@ func TestPeerConnection_Renegotiation_AddTrack_Rename(t *testing.T) {
 	defer report()
 
 	pcOffer, pcAnswer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
-	haveRenegotiated := &atomicBool{}
+	haveRenegotiated := &atomic.Bool{}
 	onTrackFired, onTrackFiredFunc := context.WithCancel(context.Background())
 	var atomicRemoteTrack atomic.Value
 	pcOffer.OnTrack(func(track *TrackRemote, _ *RTPReceiver) {
-		if !haveRenegotiated.get() {
-			t.Fatal("OnTrack was called before renegotiation")
-		}
+		assert.True(t, haveRenegotiated.Load(), "OnTrack was called before renegotiation")
 		onTrackFiredFunc()
 		atomicRemoteTrack.Store(track)
 	})
 
-	_, err = pcOffer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly})
+	_, err = pcOffer.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly},
+	)
 	assert.NoError(t, err)
 	vp8Track, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeVP8}, "foo1", "bar1")
 	assert.NoError(t, err)
@@ -308,10 +305,10 @@ func TestPeerConnection_Renegotiation_AddTrack_Rename(t *testing.T) {
 	vp8Track.rtpTrack.id = "foo2"
 	vp8Track.rtpTrack.streamID = "bar2"
 
-	haveRenegotiated.set(true)
+	haveRenegotiated.Store(true)
 	assert.NoError(t, signalPair(pcOffer, pcAnswer))
 
-	sendVideoUntilDone(onTrackFired.Done(), t, []*TrackLocalStaticSample{vp8Track})
+	sendVideoUntilDone(t, onTrackFired.Done(), []*TrackLocalStaticSample{vp8Track})
 
 	closePairNow(t, pcOffer, pcAnswer)
 
@@ -323,7 +320,7 @@ func TestPeerConnection_Renegotiation_AddTrack_Rename(t *testing.T) {
 }
 
 // TestPeerConnection_Transceiver_Mid tests that we'll provide the same
-// transceiver for a media id on successive offer/answer
+// transceiver for a media id on successive offer/answer.
 func TestPeerConnection_Transceiver_Mid(t *testing.T) {
 	lim := test.TimeOut(time.Second * 30)
 	defer lim.Stop()
@@ -375,7 +372,14 @@ func TestPeerConnection_Transceiver_Mid(t *testing.T) {
 	// Must have 3 media descriptions (2 video channels)
 	assert.Equal(t, len(offer.parsed.MediaDescriptions), 2)
 
-	assert.True(t, sdpMidHasSsrc(offer, "0", sender1.trackEncodings[0].ssrc), "Expected mid %q with ssrc %d, offer.SDP: %s", "0", sender1.trackEncodings[0].ssrc, offer.SDP)
+	assert.True(
+		t,
+		sdpMidHasSsrc(offer, "0", sender1.trackEncodings[0].ssrc),
+		"Expected mid %q with ssrc %d, offer.SDP: %s",
+		"0",
+		sender1.trackEncodings[0].ssrc,
+		offer.SDP,
+	)
 
 	// Remove first track, must keep same number of media
 	// descriptions and same track ssrc for mid 1 as previous
@@ -387,7 +391,14 @@ func TestPeerConnection_Transceiver_Mid(t *testing.T) {
 
 	assert.Equal(t, len(offer.parsed.MediaDescriptions), 2)
 
-	assert.True(t, sdpMidHasSsrc(offer, "1", sender2.trackEncodings[0].ssrc), "Expected mid %q with ssrc %d, offer.SDP: %s", "1", sender2.trackEncodings[0].ssrc, offer.SDP)
+	assert.True(
+		t,
+		sdpMidHasSsrc(offer, "1", sender2.trackEncodings[0].ssrc),
+		"Expected mid %q with ssrc %d, offer.SDP: %s",
+		"1",
+		sender2.trackEncodings[0].ssrc,
+		offer.SDP,
+	)
 
 	_, err = pcAnswer.CreateAnswer(nil)
 	assert.Equal(t, err, &rtcerr.InvalidStateError{Err: ErrIncorrectSignalingState})
@@ -412,8 +423,22 @@ func TestPeerConnection_Transceiver_Mid(t *testing.T) {
 	// We reuse the existing non-sending transceiver
 	assert.Equal(t, len(offer.parsed.MediaDescriptions), 2)
 
-	assert.True(t, sdpMidHasSsrc(offer, "0", sender3.trackEncodings[0].ssrc), "Expected mid %q with ssrc %d, offer.sdp: %s", "0", sender3.trackEncodings[0].ssrc, offer.SDP)
-	assert.True(t, sdpMidHasSsrc(offer, "1", sender2.trackEncodings[0].ssrc), "Expected mid %q with ssrc %d, offer.sdp: %s", "1", sender2.trackEncodings[0].ssrc, offer.SDP)
+	assert.True(
+		t,
+		sdpMidHasSsrc(offer, "0", sender3.trackEncodings[0].ssrc),
+		"Expected mid %q with ssrc %d, offer.sdp: %s",
+		"0",
+		sender3.trackEncodings[0].ssrc,
+		offer.SDP,
+	)
+	assert.True(
+		t,
+		sdpMidHasSsrc(offer, "1", sender2.trackEncodings[0].ssrc),
+		"Expected mid %q with ssrc %d, offer.sdp: %s",
+		"1",
+		sender2.trackEncodings[0].ssrc,
+		offer.SDP,
+	)
 
 	closePairNow(t, pcOffer, pcAnswer)
 }
@@ -440,7 +465,10 @@ func TestPeerConnection_Renegotiation_CodecChange(t *testing.T) {
 	sender1, err := pcOffer.AddTrack(track1)
 	require.NoError(t, err)
 
-	_, err = pcAnswer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly})
+	_, err = pcAnswer.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly},
+	)
 	require.NoError(t, err)
 
 	tracksCh := make(chan *TrackRemote)
@@ -450,6 +478,7 @@ func TestPeerConnection_Renegotiation_CodecChange(t *testing.T) {
 		for {
 			if _, _, readErr := track.ReadRTP(); errors.Is(readErr, io.EOF) {
 				tracksClosed <- struct{}{}
+
 				return
 			}
 		}
@@ -467,7 +496,7 @@ func TestPeerConnection_Renegotiation_CodecChange(t *testing.T) {
 	require.Equal(t, "0", transceivers[0].Mid())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go sendVideoUntilDone(ctx.Done(), t, []*TrackLocalStaticSample{track1})
+	go sendVideoUntilDone(t, ctx.Done(), []*TrackLocalStaticSample{track1})
 
 	remoteTrack1 := <-tracksCh
 	cancel()
@@ -492,7 +521,7 @@ func TestPeerConnection_Renegotiation_CodecChange(t *testing.T) {
 	require.Equal(t, "0", transceivers[0].Mid())
 
 	ctx, cancel = context.WithCancel(context.Background())
-	go sendVideoUntilDone(ctx.Done(), t, []*TrackLocalStaticSample{track2})
+	go sendVideoUntilDone(t, ctx.Done(), []*TrackLocalStaticSample{track2})
 
 	remoteTrack2 := <-tracksCh
 	cancel()
@@ -517,11 +546,12 @@ func TestPeerConnection_Renegotiation_RemoveTrack(t *testing.T) {
 	defer report()
 
 	pcOffer, pcAnswer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
-	_, err = pcAnswer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly})
+	_, err = pcAnswer.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly},
+	)
 	assert.NoError(t, err)
 
 	vp8Track, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeVP8}, "foo", "bar")
@@ -539,13 +569,14 @@ func TestPeerConnection_Renegotiation_RemoveTrack(t *testing.T) {
 		for {
 			if _, _, err := track.ReadRTP(); errors.Is(err, io.EOF) {
 				trackClosedFunc()
+
 				return
 			}
 		}
 	})
 
 	assert.NoError(t, signalPair(pcOffer, pcAnswer))
-	sendVideoUntilDone(onTrackFired.Done(), t, []*TrackLocalStaticSample{vp8Track})
+	sendVideoUntilDone(t, onTrackFired.Done(), []*TrackLocalStaticSample{vp8Track})
 
 	assert.NoError(t, pcOffer.RemoveTrack(sender))
 	assert.NoError(t, signalPair(pcOffer, pcAnswer))
@@ -562,9 +593,7 @@ func TestPeerConnection_RoleSwitch(t *testing.T) {
 	defer report()
 
 	pcFirstOfferer, pcSecondOfferer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	onTrackFired, onTrackFiredFunc := context.WithCancel(context.Background())
 	pcFirstOfferer.OnTrack(func(*TrackRemote, *RTPReceiver) {
@@ -574,8 +603,12 @@ func TestPeerConnection_RoleSwitch(t *testing.T) {
 	assert.NoError(t, signalPair(pcFirstOfferer, pcSecondOfferer))
 
 	// Add a new Track to the second offerer
-	// This asserts that it will match the ordering of the last RemoteDescription, but then also add new Transceivers to the end
-	_, err = pcFirstOfferer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly})
+	// This asserts that it will match the ordering of the last RemoteDescription,
+	// but then also add new Transceivers to the end.
+	_, err = pcFirstOfferer.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly},
+	)
 	assert.NoError(t, err)
 
 	vp8Track, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeVP8}, "foo", "bar")
@@ -585,14 +618,14 @@ func TestPeerConnection_RoleSwitch(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.NoError(t, signalPair(pcSecondOfferer, pcFirstOfferer))
-	sendVideoUntilDone(onTrackFired.Done(), t, []*TrackLocalStaticSample{vp8Track})
+	sendVideoUntilDone(t, onTrackFired.Done(), []*TrackLocalStaticSample{vp8Track})
 
 	closePairNow(t, pcFirstOfferer, pcSecondOfferer)
 }
 
 // Assert that renegotiation doesn't attempt to gather ICE twice
 // Before we would attempt to gather multiple times and would put
-// the PeerConnection into a broken state
+// the PeerConnection into a broken state.
 func TestPeerConnection_Renegotiation_Trickle(t *testing.T) {
 	lim := test.TimeOut(time.Second * 30)
 	defer lim.Stop()
@@ -603,7 +636,6 @@ func TestPeerConnection_Renegotiation_Trickle(t *testing.T) {
 	settingEngine := SettingEngine{}
 
 	api := NewAPI(WithSettingEngine(settingEngine))
-	assert.NoError(t, api.mediaEngine.RegisterDefaultCodecs())
 
 	// Invalid STUN server on purpose, will stop ICE Gathering from completing in time
 	pcOffer, pcAnswer, err := api.newPair(Configuration{
@@ -613,9 +645,7 @@ func TestPeerConnection_Renegotiation_Trickle(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	_, err = pcOffer.CreateDataChannel("test-channel", nil)
 	assert.NoError(t, err)
@@ -668,9 +698,7 @@ func TestPeerConnection_Renegotiation_SetLocalDescription(t *testing.T) {
 	defer report()
 
 	pcOffer, pcAnswer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	onTrackFired, onTrackFiredFunc := context.WithCancel(context.Background())
 	pcOffer.OnTrack(func(*TrackRemote, *RTPReceiver) {
@@ -682,7 +710,10 @@ func TestPeerConnection_Renegotiation_SetLocalDescription(t *testing.T) {
 	pcOffer.ops.Done()
 	pcAnswer.ops.Done()
 
-	_, err = pcOffer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly})
+	_, err = pcOffer.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly},
+	)
 	assert.NoError(t, err)
 
 	localTrack, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeVP8}, "foo", "bar")
@@ -710,13 +741,13 @@ func TestPeerConnection_Renegotiation_SetLocalDescription(t *testing.T) {
 
 	assert.NoError(t, pcOffer.SetRemoteDescription(answer))
 
-	sendVideoUntilDone(onTrackFired.Done(), t, []*TrackLocalStaticSample{localTrack})
+	sendVideoUntilDone(t, onTrackFired.Done(), []*TrackLocalStaticSample{localTrack})
 
 	closePairNow(t, pcOffer, pcAnswer)
 }
 
 // Issue #346, don't start the SCTP Subsystem if the RemoteDescription doesn't contain one
-// Before we would always start it, and re-negotiations would fail because SCTP was in flight
+// Before we would always start it, and re-negotiations would fail because SCTP was in flight.
 func TestPeerConnection_Renegotiation_NoApplication(t *testing.T) {
 	signalPairExcludeDataChannel := func(pcOffer, pcAnswer *PeerConnection) {
 		offer, err := pcOffer.CreateOffer(nil)
@@ -744,9 +775,7 @@ func TestPeerConnection_Renegotiation_NoApplication(t *testing.T) {
 	defer report()
 
 	pcOffer, pcAnswer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	pcOfferConnected, pcOfferConnectedCancel := context.WithCancel(context.Background())
 	pcOffer.OnICEConnectionStateChange(func(i ICEConnectionState) {
@@ -762,10 +791,16 @@ func TestPeerConnection_Renegotiation_NoApplication(t *testing.T) {
 		}
 	})
 
-	_, err = pcOffer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionSendrecv})
+	_, err = pcOffer.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionSendrecv},
+	)
 	assert.NoError(t, err)
 
-	_, err = pcAnswer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionSendrecv})
+	_, err = pcAnswer.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionSendrecv},
+	)
 	assert.NoError(t, err)
 
 	signalPairExcludeDataChannel(pcOffer, pcAnswer)
@@ -848,7 +883,7 @@ func TestAddDataChannelDuringRenegotiation(t *testing.T) {
 	closePairNow(t, pcOffer, pcAnswer)
 }
 
-// Assert that CreateDataChannel fires OnNegotiationNeeded
+// Assert that CreateDataChannel fires OnNegotiationNeeded.
 func TestNegotiationCreateDataChannel(t *testing.T) {
 	lim := test.TimeOut(time.Second * 30)
 	defer lim.Stop()
@@ -869,9 +904,8 @@ func TestNegotiationCreateDataChannel(t *testing.T) {
 	})
 
 	// Create DataChannel, wait until OnNegotiationNeeded is fired
-	if _, err = pc.CreateDataChannel("testChannel", nil); err != nil {
-		t.Error(err.Error())
-	}
+	_, err = pc.CreateDataChannel("testChannel", nil)
+	assert.NoError(t, err)
 
 	// Wait until OnNegotiationNeeded is fired
 	wg.Wait()
@@ -951,7 +985,7 @@ func TestNegotiationNeededStressOneSided(t *testing.T) {
 		}
 	})
 
-	for i := 0; i < expectedTrackCount; i++ {
+	for range expectedTrackCount {
 		track, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeVP8}, "video", "pion")
 		assert.NoError(t, err)
 
@@ -964,7 +998,7 @@ func TestNegotiationNeededStressOneSided(t *testing.T) {
 }
 
 // TestPeerConnection_Renegotiation_DisableTrack asserts that if a remote track is set inactive
-// that locally it goes inactive as well
+// that locally it goes inactive as well.
 func TestPeerConnection_Renegotiation_DisableTrack(t *testing.T) {
 	lim := test.TimeOut(time.Second * 30)
 	defer lim.Stop()
@@ -1021,6 +1055,7 @@ func TestPeerConnection_Renegotiation_Simulcast(t *testing.T) {
 		for _, rid := range rids {
 			sessionDescription += "a=" + sdpAttributeRid + ":" + rid + " send\r\n"
 		}
+
 		return sessionDescription + "a=simulcast:send " + strings.Join(rids, ";") + "\r\n"
 	}
 
@@ -1047,7 +1082,7 @@ func TestPeerConnection_Renegotiation_Simulcast(t *testing.T) {
 			for ssrc, rid := range rids {
 				header := &rtp.Header{
 					Version:        2,
-					SSRC:           uint32(ssrc),
+					SSRC:           uint32(ssrc + 1), //nolint:gosec // G115
 					SequenceNumber: sequenceNumber,
 					PayloadType:    96,
 				}
@@ -1061,14 +1096,13 @@ func TestPeerConnection_Renegotiation_Simulcast(t *testing.T) {
 	}
 
 	assertTracksClosed := func(t *testing.T) {
+		t.Helper()
+
 		trackMapLock.Lock()
 		defer trackMapLock.Unlock()
 
 		for _, track := range trackMap {
-			_, _, err := track.ReadRTP() // Ignore first Read, this is our peeked data
-			assert.Nil(t, err)
-
-			_, _, err = track.ReadRTP()
+			_, _, err := track.ReadRTP()
 			assert.Equal(t, err, io.EOF)
 		}
 	}
@@ -1099,6 +1133,7 @@ func TestPeerConnection_Renegotiation_Simulcast(t *testing.T) {
 		assert.NoError(t, pcOffer.RemoveTrack(rtpTransceiver.Sender()))
 		assert.NoError(t, signalPairWithModification(pcOffer, pcAnswer, func(sessionDescription string) string {
 			sessionDescription = strings.SplitAfter(sessionDescription, "a=end-of-candidates\r\n")[0]
+
 			return sessionDescription
 		}))
 
@@ -1141,6 +1176,7 @@ func TestPeerConnection_Renegotiation_Simulcast(t *testing.T) {
 
 				sessionDescription += l + "\n"
 			}
+
 			return signalWithRids(sessionDescription, newRids)
 		}))
 
@@ -1157,15 +1193,16 @@ func TestPeerConnection_Regegotiation_ReuseTransceiver(t *testing.T) {
 	defer report()
 
 	pcOffer, pcAnswer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
-	vp8Track, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeVP8}, "foo", "bar")
+	vp8Track, err := NewTrackLocalStaticRTP(RTPCodecCapability{MimeType: MimeTypeVP8}, "foo", "bar")
 	assert.NoError(t, err)
 	sender, err := pcOffer.AddTrack(vp8Track)
 	assert.NoError(t, err)
 	assert.NoError(t, signalPair(pcOffer, pcAnswer))
+
+	peerConnectionConnected := untilConnectionState(PeerConnectionStateConnected, pcOffer, pcAnswer)
+	peerConnectionConnected.Wait()
 
 	assert.Equal(t, len(pcOffer.GetTransceivers()), 1)
 	assert.Equal(t, pcOffer.GetTransceivers()[0].getCurrentDirection(), RTPTransceiverDirectionSendonly)
@@ -1186,6 +1223,45 @@ func TestPeerConnection_Regegotiation_ReuseTransceiver(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(pcOffer.GetTransceivers()), 2)
 	assert.True(t, sender.rtpTransceiver == pcOffer.GetTransceivers()[0])
+	assert.NoError(t, signalPair(pcOffer, pcAnswer))
+
+	tracksCh := make(chan *TrackRemote, 2)
+	pcAnswer.OnTrack(func(tr *TrackRemote, _ *RTPReceiver) {
+		tracksCh <- tr
+	})
+
+	ssrcReuse := sender.GetParameters().Encodings[0].SSRC
+	for range 10 {
+		assert.NoError(t, vp8Track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2}, Payload: []byte{0, 1, 2, 3, 4, 5}}))
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// shold not reuse tranceiver between two CreateOffer
+	offer, err := pcOffer.CreateOffer(nil)
+	assert.NoError(t, err)
+	assert.NoError(t, pcOffer.RemoveTrack(sender))
+	assert.NoError(t, pcOffer.SetLocalDescription(offer))
+	assert.NoError(t, pcAnswer.SetRemoteDescription(offer))
+	answer, err := pcAnswer.CreateAnswer(nil)
+	assert.NoError(t, pcAnswer.SetLocalDescription(answer))
+	assert.NoError(t, err)
+	assert.NoError(t, pcOffer.SetRemoteDescription(answer))
+	sender3, err := pcOffer.AddTrack(vp8Track)
+	ssrcNotReuse := sender3.GetParameters().Encodings[0].SSRC
+	assert.NoError(t, err)
+	assert.Equal(t, len(pcOffer.GetTransceivers()), 3)
+	assert.NoError(t, signalPair(pcOffer, pcAnswer))
+	assert.True(t, sender3.rtpTransceiver == pcOffer.GetTransceivers()[2])
+
+	for range 10 {
+		assert.NoError(t, vp8Track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2}, Payload: []byte{0, 1, 2, 3, 4, 5}}))
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	tr1 := <-tracksCh
+	tr2 := <-tracksCh
+	assert.Equal(t, tr1.SSRC(), ssrcReuse)
+	assert.Equal(t, tr2.SSRC(), ssrcNotReuse)
 
 	closePairNow(t, pcOffer, pcAnswer)
 }
@@ -1204,9 +1280,15 @@ func TestPeerConnection_Renegotiation_MidConflict(t *testing.T) {
 	_, err = offerPC.CreateDataChannel("test", nil)
 	assert.NoError(t, err)
 
-	_, err = offerPC.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionSendonly})
+	_, err = offerPC.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionSendonly},
+	)
 	assert.NoError(t, err)
-	_, err = offerPC.AddTransceiverFromKind(RTPCodecTypeAudio, RTPTransceiverInit{Direction: RTPTransceiverDirectionSendonly})
+	_, err = offerPC.AddTransceiverFromKind(
+		RTPCodecTypeAudio,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionSendonly},
+	)
 	assert.NoError(t, err)
 
 	offer, err := offerPC.CreateOffer(nil)
@@ -1219,10 +1301,16 @@ func TestPeerConnection_Renegotiation_MidConflict(t *testing.T) {
 	assert.NoError(t, offerPC.SetRemoteDescription(answer))
 	assert.Equal(t, SignalingStateStable, offerPC.SignalingState())
 
-	tr, err := offerPC.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionSendonly})
+	tr, err := offerPC.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionSendonly},
+	)
 	assert.NoError(t, err)
 	assert.NoError(t, tr.SetMid("3"))
-	_, err = offerPC.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionSendrecv})
+	_, err = offerPC.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionSendrecv},
+	)
 	assert.NoError(t, err)
 	_, err = offerPC.CreateOffer(nil)
 	assert.NoError(t, err)
@@ -1239,9 +1327,7 @@ func TestPeerConnection_Regegotiation_AnswerAddsTrack(t *testing.T) {
 	defer report()
 
 	pcOffer, pcAnswer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	tracksCh := make(chan *TrackRemote)
 	pcOffer.OnTrack(func(track *TrackRemote, _ *RTPReceiver) {
@@ -1275,7 +1361,7 @@ func TestPeerConnection_Regegotiation_AnswerAddsTrack(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	go sendVideoUntilDone(ctx.Done(), t, []*TrackLocalStaticSample{vp8Track})
+	go sendVideoUntilDone(t, ctx.Done(), []*TrackLocalStaticSample{vp8Track})
 
 	<-tracksCh
 	cancel()
@@ -1291,22 +1377,18 @@ func TestNegotiationNeededWithRecvonlyTrack(t *testing.T) {
 	defer report()
 
 	pcOffer, pcAnswer, err := newPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	pcAnswer.OnNegotiationNeeded(wg.Done)
 
-	_, err = pcOffer.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := signalPair(pcOffer, pcAnswer); err != nil {
-		t.Fatal(err)
-	}
+	_, err = pcOffer.AddTransceiverFromKind(
+		RTPCodecTypeVideo,
+		RTPTransceiverInit{Direction: RTPTransceiverDirectionRecvonly},
+	)
+	assert.NoError(t, err)
+	assert.NoError(t, signalPair(pcOffer, pcAnswer))
 
 	onDataChannel, onDataChannelCancel := context.WithCancel(context.Background())
 	pcAnswer.OnDataChannel(func(*DataChannel) {

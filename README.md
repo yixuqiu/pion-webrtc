@@ -8,8 +8,7 @@
 <p align="center">
   <a href="https://pion.ly"><img src="https://img.shields.io/badge/pion-webrtc-gray.svg?longCache=true&colorB=brightgreen" alt="Pion WebRTC"></a>
   <a href="https://sourcegraph.com/github.com/pion/webrtc?badge"><img src="https://sourcegraph.com/github.com/pion/webrtc/-/badge.svg" alt="Sourcegraph Widget"></a>
-  <a href="https://pion.ly/slack"><img src="https://img.shields.io/badge/join-us%20on%20slack-gray.svg?longCache=true&logo=slack&colorB=brightgreen" alt="Slack Widget"></a>
-  <a href="https://twitter.com/_pion?ref_src=twsrc%5Etfw"><img src="https://img.shields.io/twitter/url.svg?label=Follow%20%40_pion&style=social&url=https%3A%2F%2Ftwitter.com%2F_pion" alt="Twitter Widget"></a>
+  <a href="https://discord.gg/PngbdqpFbt"><img src="https://img.shields.io/badge/join-us%20on%20discord-gray.svg?longCache=true&logo=discord&colorB=brightblue" alt="join us on Discord"></a> <a href="https://bsky.app/profile/pion.ly"><img src="https://img.shields.io/badge/follow-us%20on%20bluesky-gray.svg?longCache=true&logo=bluesky&colorB=brightblue" alt="Follow us on Bluesky"></a> <a href="https://twitter.com/_pion?ref_src=twsrc%5Etfw"><img src="https://img.shields.io/twitter/url.svg?label=Follow%20%40_pion&style=social&url=https%3A%2F%2Ftwitter.com%2F_pion" alt="Twitter Widget"></a>
   <a href="https://github.com/pion/awesome-pion" alt="Awesome Pion"><img src="https://cdn.rawgit.com/sindresorhus/awesome/d7305f38d29fed78fa85652e3a63e154dd8e8829/media/badge.svg"></a>
   <br>
   <img alt="GitHub Workflow Status" src="https://img.shields.io/github/actions/workflow/status/pion/webrtc/test.yaml">
@@ -19,6 +18,16 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 <br>
+
+### New Release
+
+Pion WebRTC v4.0.0 has been released! See the [release notes](https://github.com/pion/webrtc/wiki/Release-WebRTC@v4.0.0) to learn about new features and breaking changes.
+
+If you aren't able to upgrade yet check the [tags](https://github.com/pion/webrtc/tags) for the latest `v3` release.
+
+We would love your feedback! Please create GitHub issues or Join the [Discord](https://discord.gg/PngbdqpFbt) to follow development and speak with the maintainers.
+
+-----
 
 ### Usage
 [Go Modules](https://blog.golang.org/using-go-modules) are mandatory for using Pion WebRTC. So make sure you set `export GO111MODULE=on`, and explicitly specify `/v4` (or an earlier version) when importing.
@@ -32,7 +41,7 @@
 
 **[GoDoc](https://pkg.go.dev/github.com/pion/webrtc/v4)** is an auto generated API reference. All our Public APIs are commented.
 
-**[FAQ](https://github.com/pion/webrtc/wiki/FAQ)** has answers to common questions. If you have a question not covered please ask in [Slack](https://pion.ly/slack) we are always looking to expand it.
+**[FAQ](https://github.com/pion/webrtc/wiki/FAQ)** has answers to common questions. If you have a question not covered please ask in [Discord](https://discord.gg/PngbdqpFbt) we are always looking to expand it.
 
 Now go build something awesome! Here are some **ideas** to get your creative juices flowing:
 * Send a video file to multiple browser in real time for perfectly synchronized movie watching.
@@ -42,16 +51,17 @@ Now go build something awesome! Here are some **ideas** to get your creative jui
 * Build a conferencing application that processes audio/video and make decisions off of it.
 * Remotely control a robots and stream its cameras in realtime.
 
-### Want to learn more about WebRTC?
-Join our [Office Hours](https://github.com/pion/webrtc/wiki/OfficeHours). Come hang out, ask questions, get help debugging and
-hear about the cool things being built with WebRTC. We also start every meeting with basic project planning.
-
+### Need Help?
 Check out [WebRTC for the Curious](https://webrtcforthecurious.com). A book about WebRTC in depth, not just about the APIs.
-Learn the full details of ICE, SCTP, DTLS, SRTP, and how they work together to make up the WebRTC stack.
+Learn the full details of ICE, SCTP, DTLS, SRTP, and how they work together to make up the WebRTC stack. This is also a great
+resource if you are trying to debug. Learn the tools of the trade and how to approach WebRTC issues. This book is vendor
+agnostic and will not have any Pion specific information.
 
-This is also a great resource if you are trying to debug. Learn the tools of the trade and how to approach WebRTC issues.
+Pion has an active community on [Discord](https://discord.gg/PngbdqpFbt). Please ask for help about anything, questions don't have to be Pion specific!
+Come share your interesting project you are working on. We are here to support you.
 
-This book is vendor agnostic and will not have any Pion specific information.
+One of the maintainers of Pion [Sean-Der](https://github.com/sean-der) is available to help. Schedule at [siobud.com/meeting](https://siobud.com/meeting)
+He is available to talk about Pion or general WebRTC questions, feel free to reach out about anything!
 
 ### Features
 #### PeerConnection API
@@ -115,9 +125,9 @@ If you are looking to get involved this is a great place to get started! We woul
 Work on Pion's congestion control and bandwidth estimation was funded through the [User-Operated Internet](https://nlnet.nl/useroperated/) fund, a fund established by [NLnet](https://nlnet.nl/) made possible by financial support from the [PKT Community](https://pkt.cash/)/[The Network Steward](https://pkt.cash/network-steward) and stichting [Technology Commons Trust](https://technologycommons.org/).
 
 ### Community
-Pion has an active community on the [Slack](https://pion.ly/slack).
+Pion has an active community on the [Discord](https://discord.gg/PngbdqpFbt).
 
-Follow the [Pion Twitter](https://twitter.com/_pion) for project updates and important WebRTC news.
+Follow the [Pion Bluesky](https://bsky.app/profile/pion.ly) or [Pion Twitter](https://twitter.com/_pion) for project updates and important WebRTC news.
 
 We are always looking to support **your projects**. Please reach out if you have something to build!
 If you need commercial support or don't want to use public methods you can contact us at [team@pion.ly](mailto:team@pion.ly)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/ice/v3"
+	"github.com/pion/ice/v4"
 )
 
 // A Stats object contains a set of statistics copies out of a monitored component
@@ -18,8 +18,8 @@ type Stats interface {
 	statsMarker()
 }
 
-// UnmarshalStatsJSON unmarshals a Stats object from JSON
-func UnmarshalStatsJSON(b []byte) (Stats, error) {
+// UnmarshalStatsJSON unmarshals a Stats object from JSON.
+func UnmarshalStatsJSON(b []byte) (Stats, error) { //nolint:cyclop
 	type typeJSON struct {
 		Type StatsType `json:"type"`
 	}
@@ -135,17 +135,17 @@ const (
 	// StatsTypeCertificate is used by CertificateStats.
 	StatsTypeCertificate StatsType = "certificate"
 
-	// StatsTypeSCTPTransport is used by SCTPTransportStats
+	// StatsTypeSCTPTransport is used by SCTPTransportStats.
 	StatsTypeSCTPTransport StatsType = "sctp-transport"
 )
 
-// MediaKind indicates the kind of media (audio or video)
+// MediaKind indicates the kind of media (audio or video).
 type MediaKind string
 
 const (
-	// MediaKindAudio indicates this is audio stats
+	// MediaKindAudio indicates this is audio stats.
 	MediaKindAudio MediaKind = "audio"
-	// MediaKindVideo indicates this is video stats
+	// MediaKindVideo indicates this is video stats.
 	MediaKindVideo MediaKind = "video"
 )
 
@@ -202,11 +202,12 @@ func (src *statsReportCollector) Ready() StatsReport {
 	src.collectingGroup.Wait()
 	src.mux.Lock()
 	defer src.mux.Unlock()
+
 	return src.report
 }
 
 // CodecType specifies whether a CodecStats objects represents a media format
-// that is being encoded or decoded
+// that is being encoded or decoded.
 type CodecType string
 
 const (
@@ -269,12 +270,21 @@ func unmarshalCodecStats(b []byte) (CodecStats, error) {
 	if err != nil {
 		return CodecStats{}, fmt.Errorf("unmarshal codec stats: %w", err)
 	}
+
 	return codecStats, nil
 }
 
 // InboundRTPStreamStats contains statistics for an inbound RTP stream that is
 // currently received with this PeerConnection object.
 type InboundRTPStreamStats struct {
+	// Mid represents a mid value of RTPTransceiver owning this stream, if that value is not
+	// null. Otherwise, this member is not present.
+	Mid string `json:"mid"`
+
+	// Rid only exists if a rid has been set for this RTP stream.
+	// Must not exist for audio.
+	Rid string `json:"rid,omitempty"`
+
 	// Timestamp is the timestamp associated with this object.
 	Timestamp StatsTimestamp `json:"timestamp"`
 
@@ -309,9 +319,91 @@ type InboundRTPStreamStats struct {
 	// received by the sender. This metric is only valid for video and is sent by receiver.
 	PLICount uint32 `json:"pliCount"`
 
+	// TotalProcessingDelay is the sum of the time, in seconds, each audio sample or video frame
+	// takes from the time the first RTP packet is received (reception timestamp) and to the time
+	// the corresponding sample or frame is decoded (decoded timestamp). At this point the audio
+	// sample or video frame is ready for playout by the MediaStreamTrack. Typically ready for
+	// playout here means after the audio sample or video frame is fully decoded by the decoder.
+	TotalProcessingDelay float64 `json:"totalProcessingDelay"`
+
 	// NACKCount counts the total number of Negative ACKnowledgement (NACK) packets
 	// received by the sender and is sent by receiver.
 	NACKCount uint32 `json:"nackCount"`
+
+	// JitterBufferDelay is the sum of the time, in seconds, each audio sample or a video frame
+	// takes from the time the first packet is received by the jitter buffer (ingest timestamp)
+	// to the time it exits the jitter buffer (emit timestamp). The average jitter buffer delay
+	// can be calculated by dividing the JitterBufferDelay with the JitterBufferEmittedCount.
+	JitterBufferDelay float64 `json:"jitterBufferDelay"`
+
+	// JitterBufferTargetDelay is increased by the target jitter buffer delay every time a sample is emitted
+	// by the jitter buffer. The added target is the target delay, in seconds, at the time that
+	// the sample was emitted from the jitter buffer. To get the average target delay,
+	// divide by JitterBufferEmittedCount
+	JitterBufferTargetDelay float64 `json:"jitterBufferTargetDelay"`
+
+	// JitterBufferEmittedCount is the total number of audio samples or video frames that
+	// have come out of the jitter buffer (increasing jitterBufferDelay).
+	JitterBufferEmittedCount uint64 `json:"jitterBufferEmittedCount"`
+
+	// JitterBufferMinimumDelay works the same way as jitterBufferTargetDelay, except that
+	// it is not affected by external mechanisms that increase the jitter buffer target delay,
+	// such as  jitterBufferTarget, AV sync, or any other mechanisms. This metric is purely
+	// based on the network characteristics such as jitter and packet loss, and can be seen
+	// as the minimum obtainable jitter  buffer delay if no external factors would affect it.
+	// The metric is updated every time JitterBufferEmittedCount is updated.
+	JitterBufferMinimumDelay float64 `json:"jitterBufferMinimumDelay"`
+
+	// TotalSamplesReceived is the total number of samples that have been received on
+	// this RTP stream. This includes concealedSamples. Does not exist for video.
+	TotalSamplesReceived uint64 `json:"totalSamplesReceived"`
+
+	// ConcealedSamples is the total number of samples that are concealed samples.
+	// A concealed sample is a sample that was replaced with synthesized samples generated
+	// locally before being played out. Examples of samples that have to be concealed are
+	// samples from lost packets (reported in packetsLost) or samples from packets that
+	// arrive too late to be played out (reported in packetsDiscarded). Does not exist for video.
+	ConcealedSamples uint64 `json:"concealedSamples"`
+
+	// SilentConcealedSamples is the total number of concealed samples inserted that
+	// are "silent". Playing out silent samples results in silence or comfort noise.
+	// This is a subset of concealedSamples. Does not exist for video.
+	SilentConcealedSamples uint64 `json:"silentConcealedSamples"`
+
+	// ConcealmentEvents increases every time a concealed sample is synthesized after
+	// a non-concealed sample. That is, multiple consecutive concealed samples will increase
+	// the concealedSamples count multiple times but is a single concealment event.
+	// Does not exist for video.
+	ConcealmentEvents uint64 `json:"concealmentEvents"`
+
+	// InsertedSamplesForDeceleration is increased by the difference between the number of
+	// samples received and the number of samples played out when playout is slowed down.
+	// If playout is slowed down by inserting samples, this will be the number of inserted samples.
+	// Does not exist for video.
+	InsertedSamplesForDeceleration uint64 `json:"insertedSamplesForDeceleration"`
+
+	// RemovedSamplesForAcceleration is increased by the difference between the number of
+	// samples received and the number of samples played out when playout is sped up. If speedup
+	// is achieved by removing samples, this will be the count of samples removed.
+	// Does not exist for video.
+	RemovedSamplesForAcceleration uint64 `json:"removedSamplesForAcceleration"`
+
+	// AudioLevel represents the audio level of the receiving track..
+	//
+	// The value is a value between 0..1 (linear), where 1.0 represents 0 dBov,
+	// 0 represents silence, and 0.5 represents approximately 6 dBSPL change in
+	// the sound pressure level from 0 dBov. Does not exist for video.
+	AudioLevel float64 `json:"audioLevel"`
+
+	// TotalAudioEnergy represents the audio energy of the receiving track. It is calculated
+	// by duration * Math.pow(energy/maxEnergy, 2) for each audio sample received (and thus
+	// counted by TotalSamplesReceived). Does not exist for video.
+	TotalAudioEnergy float64 `json:"totalAudioEnergy"`
+
+	// TotalSamplesDuration represents the total duration in seconds of all samples that have been
+	// received (and thus counted by TotalSamplesReceived). Can be used with totalAudioEnergy to
+	// compute an average audio level over different intervals. Does not exist for video.
+	TotalSamplesDuration float64 `json:"totalSamplesDuration"`
 
 	// SLICount counts the total number of Slice Loss Indication (SLI) packets received
 	// by the sender. This metric is only valid for video and is sent by receiver.
@@ -320,6 +412,25 @@ type InboundRTPStreamStats struct {
 	// QPSum is the sum of the QP values of frames passed. The count of frames is
 	// in FramesDecoded for inbound stream stats, and in FramesEncoded for outbound stream stats.
 	QPSum uint64 `json:"qpSum"`
+
+	// TotalDecodeTime is the total number of seconds that have been spent decoding the FramesDecoded
+	// frames of this stream. The average decode time can be calculated by dividing this value
+	// with FramesDecoded. The time it takes to decode one frame is the time passed between
+	// feeding the decoder a frame and the decoder returning decoded data for that frame.
+	TotalDecodeTime float64 `json:"totalDecodeTime"`
+
+	// TotalInterFrameDelay is the sum of the interframe delays in seconds between consecutively
+	// rendered frames, recorded just after a frame has been rendered. The interframe delay variance
+	// be calculated from TotalInterFrameDelay, TotalSquaredInterFrameDelay, and FramesRendered according
+	// to the formula: (TotalSquaredInterFrameDelay - TotalInterFrameDelay^2 / FramesRendered) / FramesRendered.
+	// Does not exist for audio.
+	TotalInterFrameDelay float64 `json:"totalInterFrameDelay"`
+
+	// TotalSquaredInterFrameDelay is the sum of the squared interframe delays in seconds
+	// between consecutively rendered frames, recorded just after a frame has been rendered.
+	// See TotalInterFrameDelay for details on how to calculate the interframe delay variance.
+	// Does not exist for audio.
+	TotalSquaredInterFrameDelay float64 `json:"totalSquaredInterFrameDelay"`
 
 	// PacketsReceived is the total number of RTP packets received for this SSRC.
 	PacketsReceived uint32 `json:"packetsReceived"`
@@ -383,10 +494,40 @@ type InboundRTPStreamStats struct {
 	// i.e., frames that would be displayed if no frames are dropped. Only valid for video.
 	FramesDecoded uint32 `json:"framesDecoded"`
 
+	// KeyFramesDecoded represents the total number of key frames, such as key frames in
+	// VP8 [RFC6386] or IDR-frames in H.264 [RFC6184], successfully decoded for this RTP
+	// media stream. This is a subset of FramesDecoded. FramesDecoded - KeyFramesDecoded
+	// gives you the number of delta frames decoded. Does not exist for audio.
+	KeyFramesDecoded uint32 `json:"keyFramesDecoded"`
+
+	// FramesRendered represents the total number of frames that have been rendered.
+	// It is incremented just after a frame has been rendered. Does not exist for audio.
+	FramesRendered uint32 `json:"framesRendered"`
+
+	// FramesDropped is the total number of frames dropped prior to decode or dropped
+	// because the frame missed its display deadline for this receiver's track.
+	// The measurement begins when the receiver is created and is a cumulative metric
+	// as defined in Appendix A (g) of [RFC7004]. Does not exist for audio.
+	FramesDropped uint32 `json:"framesDropped"`
+
+	// FrameWidth represents the width of the last decoded frame. Before the first
+	// frame is decoded this member does not exist. Does not exist for audio.
+	FrameWidth uint32 `json:"frameWidth"`
+
+	// FrameHeight represents the height of the last decoded frame. Before the first
+	// frame is decoded this member does not exist. Does not exist for audio.
+	FrameHeight uint32 `json:"frameHeight"`
+
 	// LastPacketReceivedTimestamp represents the timestamp at which the last packet was
 	// received for this SSRC. This differs from Timestamp, which represents the time
 	// at which the statistics were generated by the local endpoint.
 	LastPacketReceivedTimestamp StatsTimestamp `json:"lastPacketReceivedTimestamp"`
+
+	// HeaderBytesReceived is the total number of RTP header and padding bytes received for this SSRC.
+	// This includes retransmissions. This does not include the size of transport layer headers such
+	// as IP or UDP. headerBytesReceived + bytesReceived equals the number of bytes received as
+	// payload over the transport.
+	HeaderBytesReceived uint64 `json:"headerBytesReceived"`
 
 	// AverageRTCPInterval is the average RTCP interval between two consecutive compound RTCP packets.
 	// This is calculated by the sending endpoint when sending compound RTCP reports.
@@ -398,8 +539,21 @@ type InboundRTPStreamStats struct {
 	// This counter can also be incremented when receiving FEC packets in-band with media packets (e.g., with Opus).
 	FECPacketsReceived uint32 `json:"fecPacketsReceived"`
 
+	// FECPacketsDiscarded is the total number of RTP FEC packets received for this SSRC where the
+	// error correction payload was discarded by the application. This may happen
+	// 1. if all the source packets protected by the FEC packet were received or already
+	// recovered by a separate FEC packet, or
+	// 2. if the FEC packet arrived late, i.e., outside the recovery window, and the
+	// lost RTP packets have already been skipped during playout.
+	// This is a subset of FECPacketsReceived.
+	FECPacketsDiscarded uint64 `json:"fecPacketsDiscarded"`
+
 	// BytesReceived is the total number of bytes received for this SSRC.
 	BytesReceived uint64 `json:"bytesReceived"`
+
+	// FramesReceived represents the total number of complete frames received on this RTP stream.
+	// This metric is incremented when the complete frame is received. Does not exist for audio.
+	FramesReceived uint32 `json:"framesReceived"`
 
 	// PacketsFailedDecryption is the cumulative number of RTP packets that failed
 	// to be decrypted. These packets are not counted by PacketsDiscarded.
@@ -419,6 +573,34 @@ type InboundRTPStreamStats struct {
 	// these numbers are not expected to match the numbers seen on sending. Not all
 	// OSes make this information available.
 	PerDSCPPacketsReceived map[string]uint32 `json:"perDscpPacketsReceived"`
+
+	// Identifies the decoder implementation used. This is useful for diagnosing interoperability issues.
+	// Does not exist for audio.
+	DecoderImplementation string `json:"decoderImplementation"`
+
+	// PauseCount is the total number of video pauses experienced by this receiver.
+	// Video is considered to be paused if time passed since last rendered frame exceeds 5 seconds.
+	// PauseCount is incremented when a frame is rendered after such a pause. Does not exist for audio.
+	PauseCount uint32 `json:"pauseCount"`
+
+	// TotalPausesDuration is the total duration of pauses (for definition of pause see PauseCount), in seconds.
+	// Does not exist for audio.
+	TotalPausesDuration float64 `json:"totalPausesDuration"`
+
+	// FreezeCount is the total number of video freezes experienced by this receiver.
+	// It is a freeze if frame duration, which is time interval between two consecutively rendered frames,
+	// is equal or exceeds Max(3 * avg_frame_duration_ms, avg_frame_duration_ms + 150),
+	// where avg_frame_duration_ms is linear average of durations of last 30 rendered frames.
+	// Does not exist for audio.
+	FreezeCount uint32 `json:"freezeCount"`
+
+	// TotalFreezesDuration is the total duration of rendered frames which are considered as frozen
+	// (for definition of freeze see freezeCount), in seconds. Does not exist for audio.
+	TotalFreezesDuration float64 `json:"totalFreezesDuration"`
+
+	// PowerEfficientDecoder indicates whether the decoder currently used is considered power efficient
+	// by the user agent. Does not exist for audio.
+	PowerEfficientDecoder bool `json:"powerEfficientDecoder"`
 }
 
 func (s InboundRTPStreamStats) statsMarker() {}
@@ -429,6 +611,7 @@ func unmarshalInboundRTPStreamStats(b []byte) (InboundRTPStreamStats, error) {
 	if err != nil {
 		return InboundRTPStreamStats{}, fmt.Errorf("unmarshal inbound rtp stream stats: %w", err)
 	}
+
 	return inboundRTPStreamStats, nil
 }
 
@@ -443,16 +626,32 @@ const (
 	// QualityLimitationReasonCPU means the resolution and/or framerate is primarily limited due to CPU load.
 	QualityLimitationReasonCPU QualityLimitationReason = "cpu"
 
-	// QualityLimitationReasonBandwidth means the resolution and/or framerate is primarily limited due to congestion cues during bandwidth estimation. Typical, congestion control algorithms use inter-arrival time, round-trip time, packet or other congestion cues to perform bandwidth estimation.
+	// QualityLimitationReasonBandwidth means the resolution and/or framerate is primarily limited
+	// due to congestion cues during bandwidth estimation.
+	// Typical, congestion control algorithms use inter-arrival time, round-trip time,
+	//  packet or other congestion cues to perform bandwidth estimation.
 	QualityLimitationReasonBandwidth QualityLimitationReason = "bandwidth"
 
-	// QualityLimitationReasonOther means the resolution and/or framerate is primarily limited for a reason other than the above.
+	// QualityLimitationReasonOther means the resolution and/or framerate is primarily limited
+	//  for a reason other than the above.
 	QualityLimitationReasonOther QualityLimitationReason = "other"
 )
 
 // OutboundRTPStreamStats contains statistics for an outbound RTP stream that is
 // currently sent with this PeerConnection object.
 type OutboundRTPStreamStats struct {
+	// Mid represents a mid value of RTPTransceiver owning this stream, if that value is not
+	// null. Otherwise, this member is not present.
+	Mid string `json:"mid"`
+
+	// Rid only exists if a rid has been set for this RTP stream.
+	// Must not exist for audio.
+	Rid string `json:"rid"`
+
+	// MediaSourceID is the identifier of the stats object representing the track currently
+	// attached to the sender of this stream, an RTCMediaSourceStats.
+	MediaSourceID string `json:"mediaSourceId"`
+
 	// Timestamp is the timestamp associated with this object.
 	Timestamp StatsTimestamp `json:"timestamp"`
 
@@ -478,6 +677,23 @@ type OutboundRTPStreamStats struct {
 	// CodecID is a unique identifier that is associated to the object that was inspected
 	// to produce the CodecStats associated with this RTP stream.
 	CodecID string `json:"codecId"`
+
+	// HeaderBytesSent is the total number of RTP header and padding bytes sent for this SSRC. This does not
+	// include the size of transport layer headers such as IP or UDP.
+	// HeaderBytesSent + BytesSent equals the number of bytes sent as payload over the transport.
+	HeaderBytesSent uint64 `json:"headerBytesSent"`
+
+	// RetransmittedPacketsSent is the total number of packets that were retransmitted for this SSRC.
+	// This is a subset of packetsSent. If RTX is not negotiated, retransmitted packets are sent
+	// over this ssrc. If RTX was negotiated, retransmitted packets are sent over a separate SSRC
+	// but is still accounted for here.
+	RetransmittedPacketsSent uint64 `json:"retransmittedPacketsSent"`
+
+	// RetransmittedBytesSent is the total number of bytes that were retransmitted for this SSRC,
+	// only including payload bytes. This is a subset of bytesSent. If RTX is not negotiated,
+	// retransmitted bytes are sent over this ssrc. If RTX was negotiated, retransmitted bytes
+	// are sent over a separate SSRC but is still accounted for here.
+	RetransmittedBytesSent uint64 `json:"retransmittedBytesSent"`
 
 	// FIRCount counts the total number of Full Intra Request (FIR) packets received
 	// by the sender. This metric is only valid for video and is sent by receiver.
@@ -547,9 +763,46 @@ type OutboundRTPStreamStats struct {
 	// It is measured in bits per second and the bitrate is calculated over a 1 second window.
 	TargetBitrate float64 `json:"targetBitrate"`
 
+	// TotalEncodedBytesTarget is increased by the target frame size in bytes every time
+	// a frame has been encoded. The actual frame size may be bigger or smaller than this number.
+	// This value goes up every time framesEncoded goes up.
+	TotalEncodedBytesTarget uint64 `json:"totalEncodedBytesTarget"`
+
+	// FrameWidth represents the width of the last encoded frame. The resolution of the
+	// encoded frame may be lower than the media source. Before the first frame is encoded
+	// this member does not exist. Does not exist for audio.
+	FrameWidth uint32 `json:"frameWidth"`
+
+	// FrameHeight represents the height of the last encoded frame. The resolution of the
+	// encoded frame may be lower than the media source. Before the first frame is encoded
+	// this member does not exist. Does not exist for audio.
+	FrameHeight uint32 `json:"frameHeight"`
+
+	// FramesPerSecond is the number of encoded frames during the last second. This may be
+	// lower than the media source frame rate. Does not exist for audio.
+	FramesPerSecond float64 `json:"framesPerSecond"`
+
+	// FramesSent represents the total number of frames sent on this RTP stream. Does not exist for audio.
+	FramesSent uint32 `json:"framesSent"`
+
+	// HugeFramesSent represents the total number of huge frames sent by this RTP stream.
+	// Huge frames, by definition, are frames that have an encoded size at least 2.5 times
+	// the average size of the frames. The average size of the frames is defined as the
+	// target bitrate per second divided by the target FPS at the time the frame was encoded.
+	// These are usually complex to encode frames with a lot of changes in the picture.
+	// This can be used to estimate, e.g slide changes in the streamed presentation.
+	// Does not exist for audio.
+	HugeFramesSent uint32 `json:"hugeFramesSent"`
+
 	// FramesEncoded represents the total number of frames successfully encoded for this RTP media stream.
 	// Only valid for video.
 	FramesEncoded uint32 `json:"framesEncoded"`
+
+	// KeyFramesEncoded represents the total number of key frames, such as key frames in VP8 [RFC6386] or
+	// IDR-frames in H.264 [RFC6184], successfully encoded for this RTP media stream. This is a subset of
+	// FramesEncoded. FramesEncoded - KeyFramesEncoded gives you the number of delta frames encoded.
+	// Does not exist for audio.
+	KeyFramesEncoded uint32 `json:"keyFramesEncoded"`
 
 	// TotalEncodeTime is the total number of seconds that has been spent encoding the
 	// framesEncoded frames of this stream. The average encode time can be calculated by
@@ -557,6 +810,12 @@ type OutboundRTPStreamStats struct {
 	// time passed between feeding the encoder a frame and the encoder returning encoded data
 	// for that frame. This does not include any additional time it may take to packetize the resulting data.
 	TotalEncodeTime float64 `json:"totalEncodeTime"`
+
+	// TotalPacketSendDelay is the total number of seconds that packets have spent buffered
+	// locally before being transmitted onto the network. The time is measured from when
+	// a packet is emitted from the RTP packetizer until it is handed over to the OS network socket.
+	// This measurement is added to totalPacketSendDelay when packetsSent is incremented.
+	TotalPacketSendDelay float64 `json:"totalPacketSendDelay"`
 
 	// AverageRTCPInterval is the average RTCP interval between two consecutive compound RTCP
 	// packets. This is calculated by the sending endpoint when sending compound RTCP reports.
@@ -572,9 +831,31 @@ type OutboundRTPStreamStats struct {
 	// for all QualityLimitationReason types, including "none". Only valid for video.
 	QualityLimitationDurations map[string]float64 `json:"qualityLimitationDurations"`
 
+	// QualityLimitationResolutionChanges is the number of times that the resolution has changed
+	// because we are quality limited (qualityLimitationReason has a value other than "none").
+	// The counter is initially zero and increases when the resolution goes up or down.
+	// For example, if a 720p track is sent as 480p for some time and then recovers to 720p,
+	// qualityLimitationResolutionChanges will have the value 2. Does not exist for audio.
+	QualityLimitationResolutionChanges uint32 `json:"qualityLimitationResolutionChanges"`
+
 	// PerDSCPPacketsSent is the total number of packets sent for this SSRC, per DSCP.
 	// DSCPs are identified as decimal integers in string form.
 	PerDSCPPacketsSent map[string]uint32 `json:"perDscpPacketsSent"`
+
+	// Active indicates whether this RTP stream is configured to be sent or disabled. Note that an
+	// active stream can still not be sending, e.g. when being limited by network conditions.
+	Active bool `json:"active"`
+
+	// Identifies the encoder implementation used. This is useful for diagnosing interoperability issues.
+	// Does not exist for audio.
+	EncoderImplementation string `json:"encoderImplementation"`
+
+	// PowerEfficientEncoder indicates whether the encoder currently used is considered power efficient.
+	// by the user agent. Does not exist for audio.
+	PowerEfficientEncoder bool `json:"powerEfficientEncoder"`
+
+	// ScalabilityMode identifies the layering mode used for video encoding. Does not exist for audio.
+	ScalabilityMode string `json:"scalabilityMode"`
 }
 
 func (s OutboundRTPStreamStats) statsMarker() {}
@@ -585,6 +866,7 @@ func unmarshalOutboundRTPStreamStats(b []byte) (OutboundRTPStreamStats, error) {
 	if err != nil {
 		return OutboundRTPStreamStats{}, fmt.Errorf("unmarshal outbound rtp stream stats: %w", err)
 	}
+
 	return outboundRTPStreamStats, nil
 }
 
@@ -692,8 +974,20 @@ type RemoteInboundRTPStreamStats struct {
 	// RTCP timestamps in the RTCP Receiver Report (RR) and measured in seconds.
 	RoundTripTime float64 `json:"roundTripTime"`
 
+	// TotalRoundTripTime represents the cumulative sum of all round trip time measurements
+	// in seconds since the beginning of the session. The individual round trip time is calculated
+	// based on the RTCP timestamps in the RTCP Receiver Report (RR) [RFC3550], hence requires
+	// a DLSR value other than 0. The average round trip time can be computed from
+	// TotalRoundTripTime by dividing it by RoundTripTimeMeasurements.
+	TotalRoundTripTime float64 `json:"totalRoundTripTime"`
+
 	// FractionLost is the fraction packet loss reported for this SSRC.
 	FractionLost float64 `json:"fractionLost"`
+
+	// RoundTripTimeMeasurements represents the total number of RTCP RR blocks received for this SSRC
+	// that contain a valid round trip time. This counter will not increment if the RoundTripTime can
+	// not be calculated because no RTCP Receiver Report with a DLSR value other than 0 has been received.
+	RoundTripTimeMeasurements uint64 `json:"roundTripTimeMeasurements"`
 }
 
 func (s RemoteInboundRTPStreamStats) statsMarker() {}
@@ -704,6 +998,7 @@ func unmarshalRemoteInboundRTPStreamStats(b []byte) (RemoteInboundRTPStreamStats
 	if err != nil {
 		return RemoteInboundRTPStreamStats{}, fmt.Errorf("unmarshal remote inbound rtp stream stats: %w", err)
 	}
+
 	return remoteInboundRTPStreamStats, nil
 }
 
@@ -791,6 +1086,28 @@ type RemoteOutboundRTPStreamStats struct {
 	// Sender Report (SR) packet, which reflects the remote endpoint's clock.
 	// That clock may not be synchronized with the local clock.
 	RemoteTimestamp StatsTimestamp `json:"remoteTimestamp"`
+
+	// ReportsSent represents the total number of RTCP Sender Report (SR) blocks sent for this SSRC.
+	ReportsSent uint64 `json:"reportsSent"`
+
+	// RoundTripTime is estimated round trip time for this SSRC based on the latest
+	// RTCP Sender Report (SR) that contains a DLRR report block as defined in [RFC3611].
+	// The Calculation of the round trip time is defined in section 4.5. of [RFC3611].
+	// Does not exist if the latest SR does not contain the DLRR report block, or if the last RR timestamp
+	// in the DLRR report block is zero, or if the delay since last RR value in the DLRR report block is zero.
+	RoundTripTime float64 `json:"roundTripTime"`
+
+	// TotalRoundTripTime represents the cumulative sum of all round trip time measurements in seconds
+	// since the beginning of the session. The individual round trip time is calculated based on the DLRR
+	// report block in the RTCP Sender Report (SR) [RFC3611]. This counter will not increment if the
+	// RoundTripTime can not be calculated. The average round trip time can be computed from
+	// TotalRoundTripTime by dividing it by RoundTripTimeMeasurements.
+	TotalRoundTripTime float64 `json:"totalRoundTripTime"`
+
+	// RoundTripTimeMeasurements represents the total number of RTCP Sender Report (SR) blocks
+	// received for this SSRC that contain a DLRR report block that can derive a valid round trip time
+	// according to [RFC3611]. This counter will not increment if the RoundTripTime can not be calculated.
+	RoundTripTimeMeasurements uint64 `json:"roundTripTimeMeasurements"`
 }
 
 func (s RemoteOutboundRTPStreamStats) statsMarker() {}
@@ -801,6 +1118,7 @@ func unmarshalRemoteOutboundRTPStreamStats(b []byte) (RemoteOutboundRTPStreamSta
 	if err != nil {
 		return RemoteOutboundRTPStreamStats{}, fmt.Errorf("unmarshal remote outbound rtp stream stats: %w", err)
 	}
+
 	return remoteOutboundRTPStreamStats, nil
 }
 
@@ -848,6 +1166,7 @@ func unmarshalCSRCStats(b []byte) (RTPContributingSourceStats, error) {
 	if err != nil {
 		return RTPContributingSourceStats{}, fmt.Errorf("unmarshal csrc stats: %w", err)
 	}
+
 	return csrcStats, nil
 }
 
@@ -911,7 +1230,8 @@ type AudioSourceStats struct {
 
 	// TotalCaptureDelay is the total delay, in seconds, for each audio sample between the time the sample was emitted
 	// by the capture device and the sample reaching the source. This can be used together with totalSamplesCaptured to
-	// calculate the average capture delay per sample. Only applicable if the audio source represents an audio capture device.
+	// calculate the average capture delay per sample.
+	// Only applicable if the audio source represents an audio capture device.
 	TotalCaptureDelay float64 `json:"totalCaptureDelay"`
 
 	// TotalSamplesCaptured is the total number of captured samples reaching the audio source, i.e. that were not dropped
@@ -974,6 +1294,7 @@ func unmarshalMediaSourceStats(b []byte) (Stats, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal audio source stats: %w", err)
 		}
+
 		return mediaSourceStats, nil
 	case MediaKindVideo:
 		var mediaSourceStats VideoSourceStats
@@ -981,6 +1302,7 @@ func unmarshalMediaSourceStats(b []byte) (Stats, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal video source stats: %w", err)
 		}
+
 		return mediaSourceStats, nil
 	default:
 		return nil, fmt.Errorf("kind: %w", ErrUnknownType)
@@ -1008,7 +1330,7 @@ type AudioPlayoutStats struct {
 	// SynthesizedSamplesDuration is measured in seconds and is incremented each time an audio sample is synthesized by
 	// this playout path. This metric can be used together with totalSamplesDuration to calculate the percentage of played
 	// out media being synthesized. If the playout path is unable to produce audio samples on time for device playout,
-	// samples are synthesized to be playout out instead. Synthesization typically only happens if the pipeline is
+	// samples are synthesized to be played out instead. Synthesization typically only happens if the pipeline is
 	// underperforming. Samples synthesized by the RTCInboundRtpStreamStats are not counted for here, but in
 	// InboundRtpStreamStats.concealedSamples.
 	SynthesizedSamplesDuration float64 `json:"synthesizedSamplesDuration"`
@@ -1042,6 +1364,7 @@ func unmarshalMediaPlayoutStats(b []byte) (Stats, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal audio playout stats: %w", err)
 	}
+
 	return audioPlayoutStats, nil
 }
 
@@ -1087,6 +1410,7 @@ func unmarshalPeerConnectionStats(b []byte) (PeerConnectionStats, error) {
 	if err != nil {
 		return PeerConnectionStats{}, fmt.Errorf("unmarshal pc stats: %w", err)
 	}
+
 	return pcStats, nil
 }
 
@@ -1141,6 +1465,7 @@ func unmarshalDataChannelStats(b []byte) (DataChannelStats, error) {
 	if err != nil {
 		return DataChannelStats{}, fmt.Errorf("unmarshal data channel stats: %w", err)
 	}
+
 	return dataChannelStats, nil
 }
 
@@ -1173,6 +1498,7 @@ func unmarshalStreamStats(b []byte) (MediaStreamStats, error) {
 	if err != nil {
 		return MediaStreamStats{}, fmt.Errorf("unmarshal stream stats: %w", err)
 	}
+
 	return streamStats, nil
 }
 
@@ -1354,6 +1680,7 @@ func unmarshalSenderStats(b []byte) (Stats, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal audio sender stats: %w", err)
 		}
+
 		return senderStats, nil
 	case MediaKindVideo:
 		var senderStats VideoSenderStats
@@ -1361,6 +1688,7 @@ func unmarshalSenderStats(b []byte) (Stats, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal video sender stats: %w", err)
 		}
+
 		return senderStats, nil
 	default:
 		return nil, fmt.Errorf("kind: %w", ErrUnknownType)
@@ -1385,6 +1713,7 @@ func unmarshalTrackStats(b []byte) (Stats, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal audio track stats: %w", err)
 		}
+
 		return trackStats, nil
 	case MediaKindVideo:
 		var trackStats SenderVideoTrackAttachmentStats
@@ -1392,6 +1721,7 @@ func unmarshalTrackStats(b []byte) (Stats, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal video track stats: %w", err)
 		}
+
 		return trackStats, nil
 	default:
 		return nil, fmt.Errorf("kind: %w", ErrUnknownType)
@@ -1420,7 +1750,7 @@ type AudioReceiverStats struct {
 	// 0 represents silence, and 0.5 represents approximately 6 dBSPL change in
 	// the sound pressure level from 0 dBov.
 	//
-	// If the track is sourced from an Receiver, does no audio processing, has a
+	// If the track is sourced from a Receiver, does no audio processing, has a
 	// constant level, and has a volume setting of 1.0, the audio level is expected
 	// to be the same as the audio level of the source SSRC, while if the volume setting
 	// is 0.5, the AudioLevel is expected to be half that value.
@@ -1545,11 +1875,11 @@ type VideoReceiverStats struct {
 	FramesReceived uint32 `json:"framesReceived"`
 
 	// KeyFramesReceived represents the total number of complete key frames received
-	// for this MediaStreamTrack, such as Infra-frames in VP8 [RFC6386] or I-frames
+	// for this MediaStreamTrack, such as Intra-frames in VP8 [RFC6386] or I-frames
 	// in H.264 [RFC6184]. This is a subset of framesReceived. `framesReceived - keyFramesReceived`
 	// gives you the number of delta frames received. This metric is incremented when
 	// the complete key frame is received. It is not incremented if a partial key
-	// frames is received and sent for decoding, i.e., the frame could not be recovered
+	// frame is received and sent for decoding, i.e., the frame could not be recovered
 	// via retransmission or FEC.
 	KeyFramesReceived uint32 `json:"keyFramesReceived"`
 
@@ -1590,6 +1920,7 @@ func unmarshalReceiverStats(b []byte) (Stats, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal audio receiver stats: %w", err)
 		}
+
 		return receiverStats, nil
 	case MediaKindVideo:
 		var receiverStats VideoReceiverStats
@@ -1597,6 +1928,7 @@ func unmarshalReceiverStats(b []byte) (Stats, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal video receiver stats: %w", err)
 		}
+
 		return receiverStats, nil
 	default:
 		return nil, fmt.Errorf("kind: %w", ErrUnknownType)
@@ -1636,11 +1968,15 @@ type TransportStats struct {
 	RTCPTransportStatsID string `json:"rtcpTransportStatsId"`
 
 	// ICERole is set to the current value of the "role" attribute of the underlying
-	// DTLSTransport's "transport".
+	// DTLSTransport's "iceTransport".
 	ICERole ICERole `json:"iceRole"`
 
 	// DTLSState is set to the current value of the "state" attribute of the underlying DTLSTransport.
 	DTLSState DTLSTransportState `json:"dtlsState"`
+
+	// ICEState is set to the current value of the "state" attribute of the underlying
+	// RTCIceTransport's "state".
+	ICEState ICETransportState `json:"iceState"`
 
 	// SelectedCandidatePairID is a unique identifier that is associated to the object
 	// that was inspected to produce the ICECandidatePairStats associated with this transport.
@@ -1650,7 +1986,7 @@ type TransportStats struct {
 	// Present only if DTLS is negotiated.
 	LocalCertificateID string `json:"localCertificateId"`
 
-	// LocalCertificateID is the ID of the CertificateStats for the remote certificate.
+	// RemoteCertificateID is the ID of the CertificateStats for the remote certificate.
 	// Present only if DTLS is negotiated.
 	RemoteCertificateID string `json:"remoteCertificateId"`
 
@@ -1672,6 +2008,7 @@ func unmarshalTransportStats(b []byte) (TransportStats, error) {
 	if err != nil {
 		return TransportStats{}, fmt.Errorf("unmarshal transport stats: %w", err)
 	}
+
 	return transportStats, nil
 }
 
@@ -1692,8 +2029,52 @@ func toStatsICECandidatePairState(state ice.CandidatePairState) (StatsICECandida
 	default:
 		// NOTE: this should never happen[tm]
 		err := fmt.Errorf("%w: %s", errStatsICECandidateStateInvalid, state.String())
+
 		return StatsICECandidatePairState("Unknown"), err
 	}
+}
+
+func toICECandidatePairStats(candidatePairStats ice.CandidatePairStats) (ICECandidatePairStats, error) {
+	state, err := toStatsICECandidatePairState(candidatePairStats.State)
+	if err != nil {
+		return ICECandidatePairStats{}, err
+	}
+
+	return ICECandidatePairStats{
+		Timestamp: statsTimestampFrom(candidatePairStats.Timestamp),
+		Type:      StatsTypeCandidatePair,
+		ID:        newICECandidatePairStatsID(candidatePairStats.LocalCandidateID, candidatePairStats.RemoteCandidateID),
+		// TransportID:
+		LocalCandidateID:              candidatePairStats.LocalCandidateID,
+		RemoteCandidateID:             candidatePairStats.RemoteCandidateID,
+		State:                         state,
+		Nominated:                     candidatePairStats.Nominated,
+		PacketsSent:                   candidatePairStats.PacketsSent,
+		PacketsReceived:               candidatePairStats.PacketsReceived,
+		BytesSent:                     candidatePairStats.BytesSent,
+		BytesReceived:                 candidatePairStats.BytesReceived,
+		LastPacketSentTimestamp:       statsTimestampFrom(candidatePairStats.LastPacketSentTimestamp),
+		LastPacketReceivedTimestamp:   statsTimestampFrom(candidatePairStats.LastPacketReceivedTimestamp),
+		FirstRequestTimestamp:         statsTimestampFrom(candidatePairStats.FirstRequestTimestamp),
+		LastRequestTimestamp:          statsTimestampFrom(candidatePairStats.LastRequestTimestamp),
+		FirstResponseTimestamp:        statsTimestampFrom(candidatePairStats.FirstResponseTimestamp),
+		LastResponseTimestamp:         statsTimestampFrom(candidatePairStats.LastResponseTimestamp),
+		FirstRequestReceivedTimestamp: statsTimestampFrom(candidatePairStats.FirstRequestReceivedTimestamp),
+		LastRequestReceivedTimestamp:  statsTimestampFrom(candidatePairStats.LastRequestReceivedTimestamp),
+		TotalRoundTripTime:            candidatePairStats.TotalRoundTripTime,
+		CurrentRoundTripTime:          candidatePairStats.CurrentRoundTripTime,
+		AvailableOutgoingBitrate:      candidatePairStats.AvailableOutgoingBitrate,
+		AvailableIncomingBitrate:      candidatePairStats.AvailableIncomingBitrate,
+		CircuitBreakerTriggerCount:    candidatePairStats.CircuitBreakerTriggerCount,
+		RequestsReceived:              candidatePairStats.RequestsReceived,
+		RequestsSent:                  candidatePairStats.RequestsSent,
+		ResponsesReceived:             candidatePairStats.ResponsesReceived,
+		ResponsesSent:                 candidatePairStats.ResponsesSent,
+		RetransmissionsReceived:       candidatePairStats.RetransmissionsReceived,
+		RetransmissionsSent:           candidatePairStats.RetransmissionsSent,
+		ConsentRequestsSent:           candidatePairStats.ConsentRequestsSent,
+		ConsentExpiredTimestamp:       statsTimestampFrom(candidatePairStats.ConsentExpiredTimestamp),
+	}, nil
 }
 
 const (
@@ -1789,9 +2170,21 @@ type ICECandidatePairStats struct {
 	// (LastRequestTimestamp - FirstRequestTimestamp) / RequestsSent.
 	LastRequestTimestamp StatsTimestamp `json:"lastRequestTimestamp"`
 
+	// FirstResponseTimestamp represents the timestamp at which the first STUN response
+	// was received on this particular candidate pair.
+	FirstResponseTimestamp StatsTimestamp `json:"firstResponseTimestamp"`
+
 	// LastResponseTimestamp represents the timestamp at which the last STUN response
 	// was received on this particular candidate pair.
 	LastResponseTimestamp StatsTimestamp `json:"lastResponseTimestamp"`
+
+	// FirstRequestReceivedTimestamp represents the timestamp at which the first
+	// connectivity check request was received.
+	FirstRequestReceivedTimestamp StatsTimestamp `json:"firstRequestReceivedTimestamp"`
+
+	// LastRequestReceivedTimestamp represents the timestamp at which the last
+	// connectivity check request was received.
+	LastRequestReceivedTimestamp StatsTimestamp `json:"lastRequestReceivedTimestamp"`
 
 	// TotalRoundTripTime represents the sum of all round trip time measurements
 	// in seconds since the beginning of the session, based on STUN connectivity
@@ -1857,6 +2250,19 @@ type ICECandidatePairStats struct {
 	// ConsentExpiredTimestamp represents the timestamp at which the latest valid
 	// STUN binding response expired.
 	ConsentExpiredTimestamp StatsTimestamp `json:"consentExpiredTimestamp"`
+
+	// PacketsDiscardedOnSend represents the total number of packets for this candidate pair
+	// that have been discarded due to socket errors, i.e. a socket error occurred
+	// when handing the packets to the socket. This might happen due to various reasons,
+	// including full buffer or no available memory.
+	PacketsDiscardedOnSend uint32 `json:"packetsDiscardedOnSend"`
+
+	// BytesDiscardedOnSend represents the total number of bytes for this candidate pair
+	// that have been discarded due to socket errors, i.e. a socket error occurred
+	// when handing the packets containing the bytes to the socket. This might happen due
+	// to various reasons, including full buffer or no available memory.
+	// Calculated as defined in [RFC3550] section 6.4.1.
+	BytesDiscardedOnSend uint32 `json:"bytesDiscardedOnSend"`
 }
 
 func (s ICECandidatePairStats) statsMarker() {}
@@ -1867,6 +2273,7 @@ func unmarshalICECandidatePairStats(b []byte) (ICECandidatePairStats, error) {
 	if err != nil {
 		return ICECandidatePairStats{}, fmt.Errorf("unmarshal ice candidate pair stats: %w", err)
 	}
+
 	return iceCandidatePairStats, nil
 }
 
@@ -1918,8 +2325,8 @@ type ICECandidateStats struct {
 	// Priority is the "Priority" field of the ICECandidate.
 	Priority int32 `json:"priority"`
 
-	// URL is the URL of the TURN or STUN server indicated in the that translated
-	// this IP address. It is the URL address surfaced in an PeerConnectionICEEvent.
+	// URL of the TURN or STUN server that produced this candidate
+	// It is the URL address surfaced in an PeerConnectionICEEvent.
 	URL string `json:"url"`
 
 	// RelayProtocol is the protocol used by the endpoint to communicate with the
@@ -1944,6 +2351,7 @@ func unmarshalICECandidateStats(b []byte) (ICECandidateStats, error) {
 	if err != nil {
 		return ICECandidateStats{}, fmt.Errorf("unmarshal ice candidate stats: %w", err)
 	}
+
 	return iceCandidateStats, nil
 }
 
@@ -1983,6 +2391,7 @@ func unmarshalCertificateStats(b []byte) (CertificateStats, error) {
 	if err != nil {
 		return CertificateStats{}, fmt.Errorf("unmarshal certificate stats: %w", err)
 	}
+
 	return certificateStats, nil
 }
 
@@ -2003,8 +2412,9 @@ type SCTPTransportStats struct {
 	// RTCTransportStats for the DTLSTransport and ICETransport supporting the SCTP transport.
 	TransportID string `json:"transportId"`
 
-	// SmoothedRoundTripTime is the latest smoothed round-trip time value, corresponding to spinfo_srtt defined in [RFC6458]
-	// but converted to seconds. If there has been no round-trip time measurements yet, this value is undefined.
+	// SmoothedRoundTripTime is the latest smoothed round-trip time value,
+	// corresponding to spinfo_srtt defined in [RFC6458] but converted to seconds.
+	// If there has been no round-trip time measurements yet, this value is undefined.
 	SmoothedRoundTripTime float64 `json:"smoothedRoundTripTime"`
 
 	// CongestionWindow is the latest congestion window, corresponding to spinfo_cwnd defined in [RFC6458].
@@ -2033,5 +2443,6 @@ func unmarshalSCTPTransportStats(b []byte) (SCTPTransportStats, error) {
 	if err := json.Unmarshal(b, &sctpTransportStats); err != nil {
 		return SCTPTransportStats{}, fmt.Errorf("unmarshal sctp transport stats: %w", err)
 	}
+
 	return sctpTransportStats, nil
 }

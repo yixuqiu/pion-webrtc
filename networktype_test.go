@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -45,8 +45,10 @@ func TestNetworkType(t *testing.T) {
 
 	for i, testCase := range testCases {
 		actual, err := NewNetworkType(testCase.typeString)
-		if (err != nil) != testCase.shouldFail {
-			t.Error(err)
+		if testCase.shouldFail {
+			assert.Error(t, err)
+		} else {
+			assert.NoError(t, err)
 		}
 		assert.Equal(t,
 			testCase.expectedType,

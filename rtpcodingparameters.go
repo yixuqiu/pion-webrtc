@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -6,6 +6,12 @@ package webrtc
 // RTPRtxParameters dictionary contains information relating to retransmission (RTX) settings.
 // https://draft.ortc.org/#dom-rtcrtprtxparameters
 type RTPRtxParameters struct {
+	SSRC SSRC `json:"ssrc"`
+}
+
+// RTPFecParameters dictionary contains information relating to forward error correction (FEC) settings.
+// https://draft.ortc.org/#dom-rtcrtpfecparameters
+type RTPFecParameters struct {
 	SSRC SSRC `json:"ssrc"`
 }
 
@@ -17,4 +23,5 @@ type RTPCodingParameters struct {
 	SSRC        SSRC             `json:"ssrc"`
 	PayloadType PayloadType      `json:"payloadType"`
 	RTX         RTPRtxParameters `json:"rtx"`
+	FEC         RTPFecParameters `json:"fec"`
 }

@@ -24,6 +24,12 @@
 		"type": "browser"
 	},
 	{
+		"title": "Repacketize",
+		"link": "repacketize",
+		"description": "The repacketize example demonstrates how many video codecs can be received, depacketized and packetized by Pion over RTP.",
+		"type": "browser"
+	},
+	{
 		"title": "Pion to Pion",
 		"link": "#",
 		"description": "Example pion-to-pion is an example of two pion instances communicating directly! It therefore has no corresponding web page.",
@@ -39,6 +45,12 @@
 		"title": "Play from Disk Renegotiation",
 		"link": "play-from-disk",
 		"description": "The play-from-disk-renegotiation example is an extension of the play-from-disk example, but demonstrates how you can add/remove video tracks from an already negotiated PeerConnection.",
+		"type": "browser"
+	},
+	{
+		"title": "Play from Disk Audio Control",
+		"link": "play-from-disk-playlist-control",
+		"description": "The play-from-disk-playlist-control example demonstrates how to play an opus playlist from a file saved to disk, and control the playlist playback from the browser.",
 		"type": "browser"
 	},
 	{

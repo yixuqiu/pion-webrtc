@@ -1,19 +1,22 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/pion/ice/v3"
+	"github.com/pion/ice/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,9 +41,7 @@ func TestStatsTimestampTime(t *testing.T) {
 			WantTime:  time.Unix(0, 1e3),
 		},
 	} {
-		if got, want := test.Timestamp.Time(), test.WantTime.UTC(); got != want {
-			t.Fatalf("StatsTimestamp(%v).Time() = %v, want %v", test.Timestamp, got, want)
-		}
+		assert.Equal(t, test.WantTime.UTC(), test.Timestamp.Time())
 	}
 }
 
@@ -50,7 +51,7 @@ type statSample struct {
 	json  string
 }
 
-func getStatsSamples() []statSample {
+func getStatsSamples() []statSample { //nolint:cyclop,maintidx
 	codecStats := CodecStats{
 		Timestamp:      1688978831527.718,
 		Type:           StatsTypeCodec,
@@ -80,47 +81,82 @@ func getStatsSamples() []statSample {
 }
 `
 	inboundRTPStreamStats := InboundRTPStreamStats{
-		Timestamp:                   1688978831527.718,
-		ID:                          "IT01A2184088143",
-		Type:                        StatsTypeInboundRTP,
-		SSRC:                        2184088143,
-		Kind:                        "audio",
-		TransportID:                 "T01",
-		CodecID:                     "CIT01_111_minptime=10;useinbandfec=1",
-		FIRCount:                    1,
-		PLICount:                    2,
-		NACKCount:                   3,
-		SLICount:                    4,
-		QPSum:                       5,
-		PacketsReceived:             6,
-		PacketsLost:                 7,
-		Jitter:                      8,
-		PacketsDiscarded:            9,
-		PacketsRepaired:             10,
-		BurstPacketsLost:            11,
-		BurstPacketsDiscarded:       12,
-		BurstLossCount:              13,
-		BurstDiscardCount:           14,
-		BurstLossRate:               15,
-		BurstDiscardRate:            16,
-		GapLossRate:                 17,
-		GapDiscardRate:              18,
-		TrackID:                     "d57dbc4b-484b-4b40-9088-d3150e3a2010",
-		ReceiverID:                  "R01",
-		RemoteID:                    "ROA2184088143",
-		FramesDecoded:               17,
-		LastPacketReceivedTimestamp: 1689668364374.181,
-		AverageRTCPInterval:         18,
-		FECPacketsReceived:          19,
-		BytesReceived:               20,
-		PacketsFailedDecryption:     21,
-		PacketsDuplicated:           22,
+		Rid:                            "q",
+		Mid:                            "1",
+		Timestamp:                      1688978831527.718,
+		ID:                             "IT01A2184088143",
+		Type:                           StatsTypeInboundRTP,
+		SSRC:                           2184088143,
+		Kind:                           "audio",
+		TransportID:                    "T01",
+		CodecID:                        "CIT01_111_minptime=10;useinbandfec=1",
+		FIRCount:                       1,
+		PLICount:                       2,
+		TotalProcessingDelay:           23,
+		NACKCount:                      3,
+		JitterBufferDelay:              24,
+		JitterBufferTargetDelay:        25,
+		JitterBufferEmittedCount:       26,
+		JitterBufferMinimumDelay:       27,
+		TotalSamplesReceived:           28,
+		ConcealedSamples:               29,
+		SilentConcealedSamples:         30,
+		ConcealmentEvents:              31,
+		InsertedSamplesForDeceleration: 32,
+		RemovedSamplesForAcceleration:  33,
+		AudioLevel:                     34,
+		TotalAudioEnergy:               35,
+		TotalSamplesDuration:           36,
+		SLICount:                       4,
+		QPSum:                          5,
+		TotalDecodeTime:                37,
+		TotalInterFrameDelay:           38,
+		TotalSquaredInterFrameDelay:    39,
+		PacketsReceived:                6,
+		PacketsLost:                    7,
+		Jitter:                         8,
+		PacketsDiscarded:               9,
+		PacketsRepaired:                10,
+		BurstPacketsLost:               11,
+		BurstPacketsDiscarded:          12,
+		BurstLossCount:                 13,
+		BurstDiscardCount:              14,
+		BurstLossRate:                  15,
+		BurstDiscardRate:               16,
+		GapLossRate:                    17,
+		GapDiscardRate:                 18,
+		TrackID:                        "d57dbc4b-484b-4b40-9088-d3150e3a2010",
+		ReceiverID:                     "R01",
+		RemoteID:                       "ROA2184088143",
+		FramesDecoded:                  17,
+		KeyFramesDecoded:               40,
+		FramesRendered:                 41,
+		FramesDropped:                  42,
+		FrameWidth:                     43,
+		FrameHeight:                    44,
+		LastPacketReceivedTimestamp:    1689668364374.181,
+		HeaderBytesReceived:            45,
+		AverageRTCPInterval:            18,
+		FECPacketsReceived:             19,
+		FECPacketsDiscarded:            46,
+		BytesReceived:                  20,
+		FramesReceived:                 47,
+		PacketsFailedDecryption:        21,
+		PacketsDuplicated:              22,
 		PerDSCPPacketsReceived: map[string]uint32{
 			"123": 23,
 		},
+		DecoderImplementation: "libvpx",
+		PauseCount:            48,
+		TotalPausesDuration:   48.123,
+		FreezeCount:           49,
+		TotalFreezesDuration:  49.321,
+		PowerEfficientDecoder: true,
 	}
 	inboundRTPStreamStatsJSON := `
 {
+  "mid": "1",
+  "rid": "q",
   "timestamp": 1688978831527.718,
   "id": "IT01A2184088143",
   "type": "inbound-rtp",
@@ -130,9 +166,26 @@ func getStatsSamples() []statSample {
   "codecId": "CIT01_111_minptime=10;useinbandfec=1",
   "firCount": 1,
   "pliCount": 2,
+  "totalProcessingDelay": 23,
   "nackCount": 3,
+  "jitterBufferDelay": 24,
+  "jitterBufferTargetDelay": 25,
+  "jitterBufferEmittedCount": 26,
+  "jitterBufferMinimumDelay": 27,
+  "totalSamplesReceived": 28,
+  "concealedSamples": 29,
+  "silentConcealedSamples": 30,
+  "concealmentEvents": 31,
+  "insertedSamplesForDeceleration": 32,
+  "removedSamplesForAcceleration": 33,
+  "audioLevel": 34,
+  "totalAudioEnergy": 35,
+  "totalSamplesDuration": 36,
   "sliCount": 4,
   "qpSum": 5,
+  "totalDecodeTime": 37,
+  "totalInterFrameDelay": 38,
+  "totalSquaredInterFrameDelay": 39,
   "packetsReceived": 6,
   "packetsLost": 7,
   "jitter": 8,
@@ -150,56 +203,92 @@ func getStatsSamples() []statSample {
   "receiverId": "R01",
   "remoteId": "ROA2184088143",
   "framesDecoded": 17,
+  "keyFramesDecoded": 40,
+  "framesRendered": 41,
+  "framesDropped": 42,
+  "frameWidth": 43,
+  "frameHeight": 44,
   "lastPacketReceivedTimestamp": 1689668364374.181,
+  "headerBytesReceived": 45,
   "averageRtcpInterval": 18,
   "fecPacketsReceived": 19,
+  "fecPacketsDiscarded": 46,
   "bytesReceived": 20,
+  "framesReceived": 47,
   "packetsFailedDecryption": 21,
   "packetsDuplicated": 22,
   "perDscpPacketsReceived": {
     "123": 23
-  }
+  },
+  "decoderImplementation": "libvpx",
+  "pauseCount": 48,
+  "totalPausesDuration": 48.123,
+  "freezeCount": 49,
+  "totalFreezesDuration": 49.321,
+  "powerEfficientDecoder": true
 }
 `
 	outboundRTPStreamStats := OutboundRTPStreamStats{
-		Timestamp:               1688978831527.718,
-		Type:                    StatsTypeOutboundRTP,
-		ID:                      "OT01A2184088143",
-		SSRC:                    2184088143,
-		Kind:                    "audio",
-		TransportID:             "T01",
-		CodecID:                 "COT01_111_minptime=10;useinbandfec=1",
-		FIRCount:                1,
-		PLICount:                2,
-		NACKCount:               3,
-		SLICount:                4,
-		QPSum:                   5,
-		PacketsSent:             6,
-		PacketsDiscardedOnSend:  7,
-		FECPacketsSent:          8,
-		BytesSent:               9,
-		BytesDiscardedOnSend:    10,
-		TrackID:                 "d57dbc4b-484b-4b40-9088-d3150e3a2010",
-		SenderID:                "S01",
-		RemoteID:                "ROA2184088143",
-		LastPacketSentTimestamp: 11,
-		TargetBitrate:           12,
-		FramesEncoded:           13,
-		TotalEncodeTime:         14,
-		AverageRTCPInterval:     15,
-		QualityLimitationReason: "cpu",
+		Mid:                      "1",
+		Rid:                      "hi",
+		MediaSourceID:            "SA5",
+		Timestamp:                1688978831527.718,
+		Type:                     StatsTypeOutboundRTP,
+		ID:                       "OT01A2184088143",
+		SSRC:                     2184088143,
+		Kind:                     "audio",
+		TransportID:              "T01",
+		CodecID:                  "COT01_111_minptime=10;useinbandfec=1",
+		HeaderBytesSent:          24,
+		RetransmittedPacketsSent: 25,
+		RetransmittedBytesSent:   26,
+		FIRCount:                 1,
+		PLICount:                 2,
+		NACKCount:                3,
+		SLICount:                 4,
+		QPSum:                    5,
+		PacketsSent:              6,
+		PacketsDiscardedOnSend:   7,
+		FECPacketsSent:           8,
+		BytesSent:                9,
+		BytesDiscardedOnSend:     10,
+		TrackID:                  "d57dbc4b-484b-4b40-9088-d3150e3a2010",
+		SenderID:                 "S01",
+		RemoteID:                 "ROA2184088143",
+		LastPacketSentTimestamp:  11,
+		TargetBitrate:            12,
+		TotalEncodedBytesTarget:  27,
+		FrameWidth:               28,
+		FrameHeight:              29,
+		FramesPerSecond:          30,
+		FramesSent:               31,
+		HugeFramesSent:           32,
+		FramesEncoded:            13,
+		KeyFramesEncoded:         33,
+		TotalEncodeTime:          14,
+		TotalPacketSendDelay:     34,
+		AverageRTCPInterval:      15,
+		QualityLimitationReason:  "cpu",
 		QualityLimitationDurations: map[string]float64{
 			"none":      16,
 			"cpu":       17,
 			"bandwidth": 18,
 			"other":     19,
 		},
+		QualityLimitationResolutionChanges: 35,
 		PerDSCPPacketsSent: map[string]uint32{
 			"123": 23,
 		},
+		Active:                true,
+		EncoderImplementation: "libvpx",
+		PowerEfficientEncoder: true,
+		ScalabilityMode:       "L1T1",
 	}
 	outboundRTPStreamStatsJSON := `
 {
+  "mid": "1",
+  "rid": "hi",
+  "mediaSourceId": "SA5",
   "timestamp": 1688978831527.718,
   "type": "outbound-rtp",
   "id": "OT01A2184088143",
@@ -207,6 +296,9 @@ func getStatsSamples() []statSample {
   "kind": "audio",
   "transportId": "T01",
   "codecId": "COT01_111_minptime=10;useinbandfec=1",
+  "headerBytesSent": 24,
+  "retransmittedPacketsSent": 25,
+  "retransmittedBytesSent": 26,
   "firCount": 1,
   "pliCount": 2,
   "nackCount": 3,
@@ -222,8 +314,16 @@ func getStatsSamples() []statSample {
   "remoteId": "ROA2184088143",
   "lastPacketSentTimestamp": 11,
   "targetBitrate": 12,
+  "totalEncodedBytesTarget": 27,
+  "frameWidth": 28,
+  "frameHeight": 29,
+  "framesPerSecond": 30,
+  "framesSent": 31,
+  "hugeFramesSent": 32,
   "framesEncoded": 13,
+  "keyFramesEncoded": 33,
   "totalEncodeTime": 14,
+  "totalPacketSendDelay": 34,
   "averageRtcpInterval": 15,
   "qualityLimitationReason": "cpu",
   "qualityLimitationDurations": {
@@ -232,40 +332,47 @@ func getStatsSamples() []statSample {
     "bandwidth": 18,
     "other": 19
   },
+  "qualityLimitationResolutionChanges": 35,
   "perDscpPacketsSent": {
     "123": 23
-  }
+  },
+  "active": true,
+  "encoderImplementation": "libvpx",
+  "powerEfficientEncoder": true,
+  "scalabilityMode": "L1T1"
 }
 `
 	remoteInboundRTPStreamStats := RemoteInboundRTPStreamStats{
-		Timestamp:             1688978831527.718,
-		Type:                  StatsTypeRemoteInboundRTP,
-		ID:                    "RIA2184088143",
-		SSRC:                  2184088143,
-		Kind:                  "audio",
-		TransportID:           "T01",
-		CodecID:               "COT01_111_minptime=10;useinbandfec=1",
-		FIRCount:              1,
-		PLICount:              2,
-		NACKCount:             3,
-		SLICount:              4,
-		QPSum:                 5,
-		PacketsReceived:       6,
-		PacketsLost:           7,
-		Jitter:                8,
-		PacketsDiscarded:      9,
-		PacketsRepaired:       10,
-		BurstPacketsLost:      11,
-		BurstPacketsDiscarded: 12,
-		BurstLossCount:        13,
-		BurstDiscardCount:     14,
-		BurstLossRate:         15,
-		BurstDiscardRate:      16,
-		GapLossRate:           17,
-		GapDiscardRate:        18,
-		LocalID:               "RIA2184088143",
-		RoundTripTime:         19,
-		FractionLost:          20,
+		Timestamp:                 1688978831527.718,
+		Type:                      StatsTypeRemoteInboundRTP,
+		ID:                        "RIA2184088143",
+		SSRC:                      2184088143,
+		Kind:                      "audio",
+		TransportID:               "T01",
+		CodecID:                   "COT01_111_minptime=10;useinbandfec=1",
+		FIRCount:                  1,
+		PLICount:                  2,
+		NACKCount:                 3,
+		SLICount:                  4,
+		QPSum:                     5,
+		PacketsReceived:           6,
+		PacketsLost:               7,
+		Jitter:                    8,
+		PacketsDiscarded:          9,
+		PacketsRepaired:           10,
+		BurstPacketsLost:          11,
+		BurstPacketsDiscarded:     12,
+		BurstLossCount:            13,
+		BurstDiscardCount:         14,
+		BurstLossRate:             15,
+		BurstDiscardRate:          16,
+		GapLossRate:               17,
+		GapDiscardRate:            18,
+		LocalID:                   "RIA2184088143",
+		RoundTripTime:             19,
+		TotalRoundTripTime:        21,
+		FractionLost:              20,
+		RoundTripTimeMeasurements: 22,
 	}
 	remoteInboundRTPStreamStatsJSON := `
 {
@@ -296,29 +403,35 @@ func getStatsSamples() []statSample {
   "gapDiscardRate": 18,
   "localId": "RIA2184088143",
   "roundTripTime": 19,
-  "fractionLost": 20
+  "totalRoundTripTime": 21,
+  "fractionLost": 20,
+  "roundTripTimeMeasurements": 22
 }
 `
 	remoteOutboundRTPStreamStats := RemoteOutboundRTPStreamStats{
-		Timestamp:              1688978831527.718,
-		Type:                   StatsTypeRemoteOutboundRTP,
-		ID:                     "ROA2184088143",
-		SSRC:                   2184088143,
-		Kind:                   "audio",
-		TransportID:            "T01",
-		CodecID:                "CIT01_111_minptime=10;useinbandfec=1",
-		FIRCount:               1,
-		PLICount:               2,
-		NACKCount:              3,
-		SLICount:               4,
-		QPSum:                  5,
-		PacketsSent:            1259,
-		PacketsDiscardedOnSend: 6,
-		FECPacketsSent:         7,
-		BytesSent:              92654,
-		BytesDiscardedOnSend:   8,
-		LocalID:                "IT01A2184088143",
-		RemoteTimestamp:        1689668361298,
+		Timestamp:                 1688978831527.718,
+		Type:                      StatsTypeRemoteOutboundRTP,
+		ID:                        "ROA2184088143",
+		SSRC:                      2184088143,
+		Kind:                      "audio",
+		TransportID:               "T01",
+		CodecID:                   "CIT01_111_minptime=10;useinbandfec=1",
+		FIRCount:                  1,
+		PLICount:                  2,
+		NACKCount:                 3,
+		SLICount:                  4,
+		QPSum:                     5,
+		PacketsSent:               1259,
+		PacketsDiscardedOnSend:    6,
+		FECPacketsSent:            7,
+		BytesSent:                 92654,
+		BytesDiscardedOnSend:      8,
+		LocalID:                   "IT01A2184088143",
+		RemoteTimestamp:           1689668361298,
+		ReportsSent:               9,
+		RoundTripTime:             10,
+		TotalRoundTripTime:        11,
+		RoundTripTimeMeasurements: 12,
 	}
 	remoteOutboundRTPStreamStatsJSON := `
 {
@@ -340,7 +453,11 @@ func getStatsSamples() []statSample {
   "bytesSent": 92654,
   "bytesDiscardedOnSend": 8,
   "localId": "IT01A2184088143",
-  "remoteTimestamp": 1689668361298
+  "remoteTimestamp": 1689668361298,
+  "reportsSent": 9,
+  "roundTripTime": 10,
+  "totalRoundTripTime": 11,
+  "roundTripTimeMeasurements": 12
 }
 `
 	csrcStats := RTPContributingSourceStats{
@@ -708,12 +825,16 @@ func getStatsSamples() []statSample {
 		RTCPTransportStatsID:    "T01",
 		ICERole:                 ICERoleControlling,
 		DTLSState:               DTLSTransportStateConnected,
+		ICEState:                ICETransportStateConnected,
 		SelectedCandidatePairID: "CPxIhBDNnT_sPDhy1TB",
-		LocalCertificateID:      "CFF4:4F:C4:C7:F3:31:6C:B9:D5:AD:19:64:05:9F:2F:E9:00:70:56:1E:BA:92:29:3A:08:CE:1B:27:CF:2D:AB:24",
-		RemoteCertificateID:     "CF62:AF:88:F7:F3:0F:D6:C4:93:91:1E:AD:52:F0:A4:12:04:F9:48:E7:06:16:BA:A3:86:26:8F:1E:38:1C:48:49",
-		DTLSCipher:              "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-		SRTPCipher:              "AES_CM_128_HMAC_SHA1_80",
+		//nolint:lll
+		LocalCertificateID: "CFF4:4F:C4:C7:F3:31:6C:B9:D5:AD:19:64:05:9F:2F:E9:00:70:56:1E:BA:92:29:3A:08:CE:1B:27:CF:2D:AB:24",
+		//nolint:lll
+		RemoteCertificateID: "CF62:AF:88:F7:F3:0F:D6:C4:93:91:1E:AD:52:F0:A4:12:04:F9:48:E7:06:16:BA:A3:86:26:8F:1E:38:1C:48:49",
+		DTLSCipher:          "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+		SRTPCipher:          "AES_CM_128_HMAC_SHA1_80",
 	}
+	//nolint:lll
 	transportStatsJSON := `
 {
   "timestamp": 1688978831527.718,
@@ -726,6 +847,7 @@ func getStatsSamples() []statSample {
   "rtcpTransportStatsId": "T01",
   "iceRole": "controlling",
   "dtlsState": "connected",
+  "iceState": "connected",
   "selectedCandidatePairId": "CPxIhBDNnT_sPDhy1TB",
   "localCertificateId": "CFF4:4F:C4:C7:F3:31:6C:B9:D5:AD:19:64:05:9F:2F:E9:00:70:56:1E:BA:92:29:3A:08:CE:1B:27:CF:2D:AB:24",
   "remoteCertificateId": "CF62:AF:88:F7:F3:0F:D6:C4:93:91:1E:AD:52:F0:A4:12:04:F9:48:E7:06:16:BA:A3:86:26:8F:1E:38:1C:48:49",
@@ -734,36 +856,41 @@ func getStatsSamples() []statSample {
 }
 `
 	iceCandidatePairStats := ICECandidatePairStats{
-		Timestamp:                   1688978831527.718,
-		Type:                        StatsTypeCandidatePair,
-		ID:                          "CPxIhBDNnT_LlMJOnBv",
-		TransportID:                 "T01",
-		LocalCandidateID:            "IxIhBDNnT",
-		RemoteCandidateID:           "ILlMJOnBv",
-		State:                       "waiting",
-		Nominated:                   true,
-		PacketsSent:                 1,
-		PacketsReceived:             2,
-		BytesSent:                   3,
-		BytesReceived:               4,
-		LastPacketSentTimestamp:     5,
-		LastPacketReceivedTimestamp: 6,
-		FirstRequestTimestamp:       7,
-		LastRequestTimestamp:        8,
-		LastResponseTimestamp:       9,
-		TotalRoundTripTime:          10,
-		CurrentRoundTripTime:        11,
-		AvailableOutgoingBitrate:    12,
-		AvailableIncomingBitrate:    13,
-		CircuitBreakerTriggerCount:  14,
-		RequestsReceived:            15,
-		RequestsSent:                16,
-		ResponsesReceived:           17,
-		ResponsesSent:               18,
-		RetransmissionsReceived:     19,
-		RetransmissionsSent:         20,
-		ConsentRequestsSent:         21,
-		ConsentExpiredTimestamp:     22,
+		Timestamp:                     1688978831527.718,
+		Type:                          StatsTypeCandidatePair,
+		ID:                            "CPxIhBDNnT_LlMJOnBv",
+		TransportID:                   "T01",
+		LocalCandidateID:              "IxIhBDNnT",
+		RemoteCandidateID:             "ILlMJOnBv",
+		State:                         "waiting",
+		Nominated:                     true,
+		PacketsSent:                   1,
+		PacketsReceived:               2,
+		BytesSent:                     3,
+		BytesReceived:                 4,
+		LastPacketSentTimestamp:       5,
+		LastPacketReceivedTimestamp:   6,
+		FirstRequestTimestamp:         7,
+		LastRequestTimestamp:          8,
+		FirstResponseTimestamp:        9,
+		LastResponseTimestamp:         9,
+		FirstRequestReceivedTimestamp: 9,
+		LastRequestReceivedTimestamp:  9,
+		TotalRoundTripTime:            10,
+		CurrentRoundTripTime:          11,
+		AvailableOutgoingBitrate:      12,
+		AvailableIncomingBitrate:      13,
+		CircuitBreakerTriggerCount:    14,
+		RequestsReceived:              15,
+		RequestsSent:                  16,
+		ResponsesReceived:             17,
+		ResponsesSent:                 18,
+		RetransmissionsReceived:       19,
+		RetransmissionsSent:           20,
+		ConsentRequestsSent:           21,
+		ConsentExpiredTimestamp:       22,
+		PacketsDiscardedOnSend:        23,
+		BytesDiscardedOnSend:          24,
 	}
 	iceCandidatePairStatsJSON := `
 {
@@ -783,7 +910,10 @@ func getStatsSamples() []statSample {
   "lastPacketReceivedTimestamp": 6,
   "firstRequestTimestamp": 7,
   "lastRequestTimestamp": 8,
+  "firstResponseTimestamp": 9,
   "lastResponseTimestamp": 9,
+  "firstRequestReceivedTimestamp": 9,
+  "lastRequestReceivedTimestamp": 9,
   "totalRoundTripTime": 10,
   "currentRoundTripTime": 11,
   "availableOutgoingBitrate": 12,
@@ -796,7 +926,9 @@ func getStatsSamples() []statSample {
   "retransmissionsReceived": 19,
   "retransmissionsSent": 20,
   "consentRequestsSent": 21,
-  "consentExpiredTimestamp": 22
+  "consentExpiredTimestamp": 22,
+  "packetsDiscardedOnSend": 23,
+  "bytesDiscardedOnSend": 24
 }
 `
 	localIceCandidateStats := ICECandidateStats{
@@ -862,14 +994,19 @@ func getStatsSamples() []statSample {
 }
 `
 	certificateStats := CertificateStats{
-		Timestamp:            1689668364374.479,
-		Type:                 StatsTypeCertificate,
-		ID:                   "CF23:AB:FA:0B:0E:DF:12:34:D3:6C:EA:83:43:BD:79:39:87:39:11:49:41:8A:63:0E:17:B1:3F:94:FA:E3:62:20",
+		Timestamp: 1689668364374.479,
+		Type:      StatsTypeCertificate,
+		//nolint:lll
+		ID: "CF23:AB:FA:0B:0E:DF:12:34:D3:6C:EA:83:43:BD:79:39:87:39:11:49:41:8A:63:0E:17:B1:3F:94:FA:E3:62:20",
+		//nolint:lll
 		Fingerprint:          "23:AB:FA:0B:0E:DF:12:34:D3:6C:EA:83:43:BD:79:39:87:39:11:49:41:8A:63:0E:17:B1:3F:94:FA:E3:62:20",
 		FingerprintAlgorithm: "sha-256",
-		Base64Certificate:    "MIIBFjCBvKADAgECAggAwlrxojpmgTAKBggqhkjOPQQDAjARMQ8wDQYDVQQDDAZXZWJSVEMwHhcNMjMwNzE3MDgxODU2WhcNMjMwODE3MDgxODU2WjARMQ8wDQYDVQQDDAZXZWJSVEMwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARKETeS9qNGe3ltwp+q2KgsYWsJLFCJGap4L2aa862sPijHeuzLgO2bju/mosJN0Li7mXhuKBOsCkCMU7vZHVVVMAoGCCqGSM49BAMCA0kAMEYCIQDXyuyMMrgzd+w3c4h3vPn9AzLcf9CHVHRGYyy5ReI/hgIhALkXfaZ96TQRf5FI2mBJJUX9O/q4Poe3wNZxxWeDcYN+",
-		IssuerCertificateID:  "CF62:AF:88:F7:F3:0F:D6:C4:93:91:1E:AD:52:F0:A4:12:04:F9:48:E7:06:16:BA:A3:86:26:8F:1E:38:1C:48:49",
+		//nolint:lll
+		Base64Certificate: "MIIBFjCBvKADAgECAggAwlrxojpmgTAKBggqhkjOPQQDAjARMQ8wDQYDVQQDDAZXZWJSVEMwHhcNMjMwNzE3MDgxODU2WhcNMjMwODE3MDgxODU2WjARMQ8wDQYDVQQDDAZXZWJSVEMwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARKETeS9qNGe3ltwp+q2KgsYWsJLFCJGap4L2aa862sPijHeuzLgO2bju/mosJN0Li7mXhuKBOsCkCMU7vZHVVVMAoGCCqGSM49BAMCA0kAMEYCIQDXyuyMMrgzd+w3c4h3vPn9AzLcf9CHVHRGYyy5ReI/hgIhALkXfaZ96TQRf5FI2mBJJUX9O/q4Poe3wNZxxWeDcYN+",
+		//nolint:lll
+		IssuerCertificateID: "CF62:AF:88:F7:F3:0F:D6:C4:93:91:1E:AD:52:F0:A4:12:04:F9:48:E7:06:16:BA:A3:86:26:8F:1E:38:1C:48:49",
 	}
+	//nolint:lll
 	certificateStatsJSON := `
 {
   "timestamp": 1689668364374.479,
@@ -1024,6 +1161,8 @@ func TestStatsUnmarshal(t *testing.T) {
 }
 
 func waitWithTimeout(t *testing.T, wg *sync.WaitGroup) {
+	t.Helper()
+
 	// Wait for all of the event handlers to be triggered.
 	done := make(chan struct{})
 	go func() {
@@ -1035,53 +1174,71 @@ func waitWithTimeout(t *testing.T, wg *sync.WaitGroup) {
 	case <-done:
 		break
 	case <-timeout:
-		t.Fatal("timed out waiting for waitgroup")
+		assert.Fail(t, "timed out waiting for waitgroup")
 	}
 }
 
 func getConnectionStats(t *testing.T, report StatsReport, pc *PeerConnection) PeerConnectionStats {
+	t.Helper()
+
 	stats, ok := report.GetConnectionStats(pc)
 	assert.True(t, ok)
 	assert.Equal(t, stats.Type, StatsTypePeerConnection)
+
 	return stats
 }
 
 func getDataChannelStats(t *testing.T, report StatsReport, dc *DataChannel) DataChannelStats {
+	t.Helper()
+
 	stats, ok := report.GetDataChannelStats(dc)
 	assert.True(t, ok)
 	assert.Equal(t, stats.Type, StatsTypeDataChannel)
+
 	return stats
 }
 
 func getCodecStats(t *testing.T, report StatsReport, c *RTPCodecParameters) CodecStats {
+	t.Helper()
+
 	stats, ok := report.GetCodecStats(c)
 	assert.True(t, ok)
 	assert.Equal(t, stats.Type, StatsTypeCodec)
+
 	return stats
 }
 
 func getTransportStats(t *testing.T, report StatsReport, statsID string) TransportStats {
+	t.Helper()
+
 	stats, ok := report[statsID]
 	assert.True(t, ok)
 	transportStats, ok := stats.(TransportStats)
 	assert.True(t, ok)
 	assert.Equal(t, transportStats.Type, StatsTypeTransport)
+
 	return transportStats
 }
 
 func getSctpTransportStats(t *testing.T, report StatsReport) SCTPTransportStats {
+	t.Helper()
+
 	stats, ok := report["sctpTransport"]
 	assert.True(t, ok)
 	transportStats, ok := stats.(SCTPTransportStats)
 	assert.True(t, ok)
 	assert.Equal(t, transportStats.Type, StatsTypeSCTPTransport)
+
 	return transportStats
 }
 
 func getCertificateStats(t *testing.T, report StatsReport, certificate *Certificate) CertificateStats {
+	t.Helper()
+
 	certificateStats, ok := report.GetCertificateStats(certificate)
 	assert.True(t, ok)
 	assert.Equal(t, certificateStats.Type, StatsTypeCertificate)
+
 	return certificateStats
 }
 
@@ -1093,6 +1250,7 @@ func findLocalCandidateStats(report StatsReport) []ICECandidateStats {
 			result = append(result, stats)
 		}
 	}
+
 	return result
 }
 
@@ -1104,10 +1262,13 @@ func findRemoteCandidateStats(report StatsReport) []ICECandidateStats {
 			result = append(result, stats)
 		}
 	}
+
 	return result
 }
 
 func findCandidatePairStats(t *testing.T, report StatsReport) []ICECandidatePairStats {
+	t.Helper()
+
 	result := []ICECandidatePairStats{}
 	for _, s := range report {
 		stats, ok := s.(ICECandidatePairStats)
@@ -1116,6 +1277,29 @@ func findCandidatePairStats(t *testing.T, report StatsReport) []ICECandidatePair
 			result = append(result, stats)
 		}
 	}
+
+	return result
+}
+
+func findInboundRTPStats(report StatsReport) []InboundRTPStreamStats {
+	result := []InboundRTPStreamStats{}
+	for _, s := range report {
+		if stats, ok := s.(InboundRTPStreamStats); ok {
+			result = append(result, stats)
+		}
+	}
+
+	return result
+}
+
+func findInboundRTPStatsBySSRC(report StatsReport, ssrc SSRC) []InboundRTPStreamStats {
+	result := []InboundRTPStreamStats{}
+	for _, s := range report {
+		if stats, ok := s.(InboundRTPStreamStats); ok && stats.SSRC == ssrc {
+			result = append(result, stats)
+		}
+	}
+
 	return result
 }
 
@@ -1157,6 +1341,7 @@ func signalPairForStats(pcOffer *PeerConnection, pcAnswer *PeerConnection) error
 		if err != nil {
 			return err
 		}
+
 		return nil
 	}
 }
@@ -1201,7 +1386,7 @@ func TestStatsConvertState(t *testing.T) {
 	}
 }
 
-func TestPeerConnection_GetStats(t *testing.T) {
+func TestPeerConnection_GetStats(t *testing.T) { //nolint:cyclop // involves multiple branches and waits
 	offerPC, answerPC, err := newPair()
 	assert.NoError(t, err)
 
@@ -1246,6 +1431,31 @@ func TestPeerConnection_GetStats(t *testing.T) {
 		})
 	})
 
+	// register OnTrack before we start signaling so we can safely wait for the first RTP packet.
+	var gotFirstPacket atomic.Bool
+	var once sync.Once
+	answerPC.OnTrack(func(tr *TrackRemote, _ *RTPReceiver) {
+		once.Do(func() {
+			go func() {
+				// read one RTP packet to ensure TrackRemote has been initialized.
+				for {
+					_, _, firstPacketErr := tr.ReadRTP()
+
+					if firstPacketErr == nil {
+						gotFirstPacket.Store(true)
+
+						return
+					}
+
+					if errors.Is(firstPacketErr, io.EOF) || errors.Is(firstPacketErr, io.ErrClosedPipe) {
+						return
+					}
+					// retry on transient errors
+				}
+			}()
+		})
+	})
+
 	assert.NoError(t, signalPairForStats(offerPC, answerPC))
 	waitWithTimeout(t, &dcWait)
 
@@ -1279,6 +1489,56 @@ func TestPeerConnection_GetStats(t *testing.T) {
 	assert.NotEmpty(t, findLocalCandidateStats(reportPCAnswer))
 	assert.NotEmpty(t, findRemoteCandidateStats(reportPCAnswer))
 	assert.NotEmpty(t, findCandidatePairStats(t, reportPCAnswer))
+
+	inboundAnswer := findInboundRTPStats(reportPCAnswer)
+	assert.NotEmpty(t, inboundAnswer)
+
+	// Send a sample frame to generate RTP packets
+	sample := media.Sample{
+		Data:      []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05},
+		Duration:  time.Second / 30, // 30 FPS
+		Timestamp: time.Now(),
+	}
+	assert.NoError(t, track1.WriteSample(sample))
+
+	// Wait until the remote track has read one RTP packet (avoids racing GetStats with TrackRemote initialization).
+	assert.Eventually(
+		t,
+		gotFirstPacket.Load,
+		2*time.Second,
+		10*time.Millisecond,
+		"Expected to read an RTP packet",
+	)
+
+	// Get fresh stats after sending the sample
+	reportPCAnswer = answerPC.GetStats()
+
+	receivers := answerPC.GetReceivers()
+	for _, r := range receivers {
+		for _, tr := range r.Tracks() {
+			if tr.SSRC() == 0 {
+				continue
+			}
+			matches := findInboundRTPStatsBySSRC(reportPCAnswer, tr.SSRC())
+			require.NotEmpty(t, matches)
+
+			for _, inboundStats := range matches {
+				assert.Equal(t, StatsTypeInboundRTP, inboundStats.Type)
+				assert.Equal(t, tr.SSRC(), inboundStats.SSRC)
+				assert.NotEmpty(t, inboundStats.Kind)
+				assert.NotEmpty(t, inboundStats.TransportID)
+				assert.Greater(t, inboundStats.PacketsReceived, uint32(0))
+				assert.GreaterOrEqual(t, inboundStats.PacketsLost, int32(0))
+				assert.Greater(t, inboundStats.BytesReceived, uint64(0))
+				assert.GreaterOrEqual(t, inboundStats.Jitter, 0.0)
+				assert.GreaterOrEqual(t, inboundStats.HeaderBytesReceived, uint64(0))
+				assert.GreaterOrEqual(t, inboundStats.LastPacketReceivedTimestamp, StatsTimestamp(0))
+				assert.GreaterOrEqual(t, inboundStats.FIRCount, uint32(0))
+				assert.GreaterOrEqual(t, inboundStats.PLICount, uint32(0))
+				assert.GreaterOrEqual(t, inboundStats.NACKCount, uint32(0))
+			}
+		}
+	}
 	assert.NoError(t, err)
 	for i := range offerPC.api.mediaEngine.videoCodecs {
 		codecStat := getCodecStats(t, reportPCOffer, &(offerPC.api.mediaEngine.videoCodecs[i]))
@@ -1344,4 +1604,796 @@ func TestPeerConnection_GetStats_Closed(t *testing.T) {
 	assert.NoError(t, pc.Close())
 
 	pc.GetStats()
+}
+
+func TestUnmarshalStatsJSON_TypeFieldUnmarshalError(t *testing.T) {
+	input := []byte(`{"type":123}`)
+
+	_, err := UnmarshalStatsJSON(input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal json type:")
+}
+
+func TestUnmarshalStatsJSON_SCTPTransport(t *testing.T) {
+	input := []byte(`{
+		"timestamp": 1689668364374.479,
+		"type": "sctp-transport",
+		"id": "SCTP1",
+		"transportId": "T01",
+		"smoothedRoundTripTime": 0.123,
+		"congestionWindow": 512,
+		"receiverWindow": 2048,
+		"mtu": 1200,
+		"unackData": 7,
+		"bytesSent": 12345,
+		"bytesReceived": 67890
+	}`)
+
+	s, err := UnmarshalStatsJSON(input)
+	require.NoError(t, err)
+
+	st, ok := s.(SCTPTransportStats)
+	require.True(t, ok, "expected SCTPTransportStats")
+	assert.Equal(t, StatsTypeSCTPTransport, st.Type)
+	assert.Equal(t, "SCTP1", st.ID)
+	assert.Equal(t, "T01", st.TransportID)
+	assert.InDelta(t, 0.123, st.SmoothedRoundTripTime, 1e-9)
+	assert.EqualValues(t, 512, st.CongestionWindow)
+	assert.EqualValues(t, 2048, st.ReceiverWindow)
+	assert.EqualValues(t, 1200, st.MTU)
+	assert.EqualValues(t, 7, st.UNACKData)
+	assert.EqualValues(t, 12345, st.BytesSent)
+	assert.EqualValues(t, 67890, st.BytesReceived)
+}
+
+func TestUnmarshalStatsJSON_UnknownType(t *testing.T) {
+	input := []byte(`{"type":"def-not-a-real-type"}`)
+
+	_, err := UnmarshalStatsJSON(input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnknownType)
+}
+
+func TestUnmarshalCodecStats_ErrorWrap(t *testing.T) {
+	bad := []byte(`{"payloadType":"not-a-number"}`)
+
+	_, err := unmarshalCodecStats(bad)
+	require.Error(t, err)
+
+	assert.ErrorContains(t, err, "unmarshal codec stats:")
+
+	var ute *json.UnmarshalTypeError
+	assert.True(t, errors.As(err, &ute), "expected underlying error to be *json.UnmarshalTypeError")
+}
+
+func TestUnmarshalInboundRTPStreamStats_ErrorWrap(t *testing.T) {
+	bad := []byte(`{"packetsReceived":"not-a-number"}`)
+
+	_, err := unmarshalInboundRTPStreamStats(bad)
+	require.Error(t, err)
+
+	assert.ErrorContains(t, err, "unmarshal inbound rtp stream stats:")
+
+	var ute *json.UnmarshalTypeError
+	assert.True(t, errors.As(err, &ute), "expected underlying error to be *json.UnmarshalTypeError")
+}
+
+func TestUnmarshalOutboundRTPStreamStats_ErrorWrap(t *testing.T) {
+	bad := []byte(`{"packetsSent":"oops"}`)
+
+	_, err := unmarshalOutboundRTPStreamStats(bad)
+	require.Error(t, err)
+
+	assert.ErrorContains(t, err, "unmarshal outbound rtp stream stats:")
+
+	var ute *json.UnmarshalTypeError
+	assert.True(t, errors.As(err, &ute), "expected underlying error to be *json.UnmarshalTypeError")
+}
+
+func TestUnmarshalRemoteInboundRTPStreamStats_ErrorWrap(t *testing.T) {
+	bad := []byte(`{"packetsReceived":"nope"}`)
+
+	_, err := unmarshalRemoteInboundRTPStreamStats(bad)
+	require.Error(t, err)
+
+	assert.ErrorContains(t, err, "unmarshal remote inbound rtp stream stats:")
+
+	var ute *json.UnmarshalTypeError
+	assert.True(t, errors.As(err, &ute), "expected underlying error to be *json.UnmarshalTypeError")
+}
+
+func TestUnmarshalRemoteOutboundRTPStreamStats_ErrorWrap(t *testing.T) {
+	bad := []byte(`{"packetsSent":"nope"}`)
+
+	_, err := unmarshalRemoteOutboundRTPStreamStats(bad)
+	require.Error(t, err)
+
+	assert.ErrorContains(t, err, "unmarshal remote outbound rtp stream stats:")
+
+	var ute *json.UnmarshalTypeError
+	assert.True(t, errors.As(err, &ute), "expected underlying error to be *json.UnmarshalTypeError")
+}
+
+func TestUnmarshalCSRCStats_ErrorWrap(t *testing.T) {
+	bad := []byte(`{"packetsContributedTo":"nope"}`)
+
+	_, err := unmarshalCSRCStats(bad)
+	require.Error(t, err)
+
+	assert.ErrorContains(t, err, "unmarshal csrc stats:")
+
+	var ute *json.UnmarshalTypeError
+	assert.True(t, errors.As(err, &ute), "expected underlying error to be *json.UnmarshalTypeError")
+}
+
+func TestUnmarshalMediaSourceStats_ErrorPaths(t *testing.T) {
+	t.Run("error unmarshalling kind holder", func(t *testing.T) {
+		bad := []byte(`{"kind":123}`)
+		_, err := unmarshalMediaSourceStats(bad)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "unmarshal json kind:")
+
+		var ute *json.UnmarshalTypeError
+		assert.True(t, errors.As(err, &ute), "expected underlying *json.UnmarshalTypeError")
+	})
+
+	t.Run("error unmarshalling audio source stats", func(t *testing.T) {
+		bad := []byte(`{"type":"media-source","kind":"audio","audioLevel":"oops"}`)
+		_, err := unmarshalMediaSourceStats(bad)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "unmarshal audio source stats:")
+
+		var ute *json.UnmarshalTypeError
+		assert.True(t, errors.As(err, &ute), "expected underlying *json.UnmarshalTypeError")
+	})
+
+	t.Run("error unmarshalling video source stats", func(t *testing.T) {
+		bad := []byte(`{"type":"media-source","kind":"video","width":"oops"}`)
+		_, err := unmarshalMediaSourceStats(bad)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "unmarshal video source stats:")
+
+		var ute *json.UnmarshalTypeError
+		assert.True(t, errors.As(err, &ute), "expected underlying *json.UnmarshalTypeError")
+	})
+
+	t.Run("unknown kind default case", func(t *testing.T) {
+		bad := []byte(`{"type":"media-source","kind":"banana"}`)
+		_, err := unmarshalMediaSourceStats(bad)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "kind:")
+		assert.True(t, errors.Is(err, ErrUnknownType), "expected ErrUnknownType")
+	})
+}
+
+func TestUnmarshalMediaPlayoutStats_Error(t *testing.T) {
+	badJSON := []byte(`{
+		"type": "media-playout",
+		"id": "AP",
+		"kind": "audio",
+		"timestamp": "not-a-number"
+	}`)
+
+	s, err := unmarshalMediaPlayoutStats(badJSON)
+	require.Error(t, err)
+	assert.Nil(t, s)
+	assert.Contains(t, err.Error(), "unmarshal audio playout stats")
+}
+
+func TestUnmarshalPeerConnectionStats_Error(t *testing.T) {
+	bad := []byte(`{
+		"type": "peer-connection",
+		"id": "P",
+		"timestamp": "not-a-number"
+	}`)
+
+	got, err := unmarshalPeerConnectionStats(bad)
+	require.Error(t, err)
+	assert.Equal(t, PeerConnectionStats{}, got, "should return zero value on error")
+	assert.Contains(t, err.Error(), "unmarshal pc stats")
+}
+
+func TestUnmarshalDataChannelStats_Error(t *testing.T) {
+	bad := []byte(`{
+		"type": "data-channel",
+		"id": "D1",
+		"timestamp": "not-a-number"
+	}`)
+
+	got, err := unmarshalDataChannelStats(bad)
+	require.Error(t, err)
+	assert.Equal(t, DataChannelStats{}, got, "should return zero value on error")
+	assert.Contains(t, err.Error(), "unmarshal data channel stats")
+}
+
+func TestUnmarshalStreamStats_Error(t *testing.T) {
+	bad := []byte(`{
+		"type": "stream",
+		"id": "S1",
+		"timestamp": "invalid"
+	}`)
+
+	got, err := unmarshalStreamStats(bad)
+	require.Error(t, err)
+	assert.Equal(t, MediaStreamStats{}, got, "expected zero value on error")
+	assert.Contains(t, err.Error(), "unmarshal stream stats")
+}
+
+func TestUnmarshalSenderStats_SyntaxErrorOnKind(t *testing.T) {
+	s, err := unmarshalSenderStats([]byte(`{`))
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var se *json.SyntaxError
+	assert.ErrorAs(t, err, &se)
+}
+
+func TestUnmarshalSenderStats_Audio_UnmarshalTypeError(t *testing.T) {
+	payload := []byte(`{"kind":"audio","timestamp":"oops"}`)
+	s, err := unmarshalSenderStats(payload)
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestUnmarshalSenderStats_Video_UnmarshalTypeError(t *testing.T) {
+	payload := []byte(`{"kind":"video","timestamp":"oops"}`)
+	s, err := unmarshalSenderStats(payload)
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestUnmarshalSenderStats_UnknownKind(t *testing.T) {
+	s, err := unmarshalSenderStats([]byte(`{"kind":"def-not-a-real-kind"}`))
+	require.Error(t, err)
+	assert.Nil(t, s)
+	assert.ErrorIs(t, err, ErrUnknownType)
+}
+
+func TestUnmarshalTrackStats_SyntaxErrorOnKind(t *testing.T) {
+	s, err := unmarshalTrackStats([]byte(`{`)) // invalid JSON
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var se *json.SyntaxError
+	assert.ErrorAs(t, err, &se)
+}
+
+func TestUnmarshalTrackStats_Audio_UnmarshalTypeError(t *testing.T) {
+	payload := []byte(`{"kind":"` + string(MediaKindAudio) + `","timestamp":"oops"}`)
+	s, err := unmarshalTrackStats(payload)
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestUnmarshalTrackStats_Video_UnmarshalTypeError(t *testing.T) {
+	payload := []byte(`{"kind":"` + string(MediaKindVideo) + `","timestamp":"oops"}`)
+	s, err := unmarshalTrackStats(payload)
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestUnmarshalTrackStats_UnknownKind(t *testing.T) {
+	s, err := unmarshalTrackStats([]byte(`{"kind":"definitely-not-real"}`))
+	require.Error(t, err)
+	assert.Nil(t, s)
+	assert.ErrorIs(t, err, ErrUnknownType)
+}
+
+func TestUnmarshalReceiverStats_SyntaxErrorOnKind(t *testing.T) {
+	s, err := unmarshalReceiverStats([]byte(`{`)) // invalid JSON
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var se *json.SyntaxError
+	assert.ErrorAs(t, err, &se)
+}
+
+func TestUnmarshalReceiverStats_Audio_UnmarshalTypeError(t *testing.T) {
+	payload := []byte(`{"kind":"` + string(MediaKindAudio) + `","timestamp":"oops"}`)
+	s, err := unmarshalReceiverStats(payload)
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestUnmarshalReceiverStats_Video_UnmarshalTypeError(t *testing.T) {
+	payload := []byte(`{"kind":"` + string(MediaKindVideo) + `","timestamp":"oops"}`)
+	s, err := unmarshalReceiverStats(payload)
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestUnmarshalReceiverStats_UnknownKind(t *testing.T) {
+	s, err := unmarshalReceiverStats([]byte(`{"kind":"not-a-real-kind"}`))
+	require.Error(t, err)
+	assert.Nil(t, s)
+	assert.ErrorIs(t, err, ErrUnknownType)
+}
+
+func TestUnmarshalTransportStats_Error(t *testing.T) {
+	payload := []byte(`{"timestamp":"oops"}`)
+
+	s, err := unmarshalTransportStats(payload)
+	require.Error(t, err)
+	assert.Equal(t, TransportStats{}, s)
+	assert.Contains(t, err.Error(), "unmarshal transport stats:")
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestToICECandidatePairStats_InvalidState(t *testing.T) {
+	bogus := ice.CandidatePairState(255)
+
+	in := ice.CandidatePairStats{
+		State: bogus,
+	}
+
+	out, err := toICECandidatePairStats(in)
+	require.Error(t, err)
+	assert.Equal(t, ICECandidatePairStats{}, out)
+
+	assert.Contains(t, err.Error(), bogus.String())
+}
+
+func TestUnmarshalICECandidatePairStats_Error(t *testing.T) {
+	bad := []byte(`{"timestamp":"not-a-number"}`)
+
+	got, err := unmarshalICECandidatePairStats(bad)
+	require.Error(t, err)
+	assert.Equal(t, ICECandidatePairStats{}, got)
+
+	assert.Contains(t, err.Error(), "unmarshal ice candidate pair stats")
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestUnmarshalICECandidateStats_Error(t *testing.T) {
+	bad := []byte(`{"timestamp":"not-a-number"}`)
+
+	got, err := unmarshalICECandidateStats(bad)
+	require.Error(t, err)
+	assert.Equal(t, ICECandidateStats{}, got)
+
+	assert.Contains(t, err.Error(), "unmarshal ice candidate stats")
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestUnmarshalCertificateStats_Error(t *testing.T) {
+	bad := []byte(`{"timestamp":"not-a-number"}`)
+
+	got, err := unmarshalCertificateStats(bad)
+	require.Error(t, err)
+	assert.Equal(t, CertificateStats{}, got)
+
+	assert.Contains(t, err.Error(), "unmarshal certificate stats")
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestUnmarshalSCTPTransportStats_Success(t *testing.T) {
+	good := []byte(`{
+		"timestamp": 1234,
+		"type": "sctp-transport",
+		"id": "SCTP1",
+		"transportId": "T01",
+		"smoothedRoundTripTime": 0.123,
+		"congestionWindow": 512,
+		"receiverWindow": 1024,
+		"mtu": 1200,
+		"unackData": 3,
+		"bytesSent": 1000,
+		"bytesReceived": 2000
+	}`)
+
+	got, err := unmarshalSCTPTransportStats(good)
+	require.NoError(t, err)
+
+	assert.Equal(t, StatsTimestamp(1234), got.Timestamp)
+	assert.Equal(t, StatsTypeSCTPTransport, got.Type)
+	assert.Equal(t, "SCTP1", got.ID)
+	assert.Equal(t, "T01", got.TransportID)
+	assert.InDelta(t, 0.123, got.SmoothedRoundTripTime, 1e-9)
+	assert.Equal(t, uint32(512), got.CongestionWindow)
+	assert.Equal(t, uint32(1024), got.ReceiverWindow)
+	assert.Equal(t, uint32(1200), got.MTU)
+	assert.Equal(t, uint32(3), got.UNACKData)
+	assert.Equal(t, uint64(1000), got.BytesSent)
+	assert.Equal(t, uint64(2000), got.BytesReceived)
+}
+
+func TestUnmarshalSCTPTransportStats_Error(t *testing.T) {
+	bad := []byte(`{"bytesReceived":"oops"}`)
+
+	got, err := unmarshalSCTPTransportStats(bad)
+	require.Error(t, err)
+	assert.Equal(t, SCTPTransportStats{}, got)
+
+	assert.Contains(t, err.Error(), "unmarshal sctp transport stats")
+
+	var ute *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &ute)
+}
+
+func TestStatsReport_GetConnectionStats_MissingEntry(t *testing.T) {
+	conn := &PeerConnection{}
+	conn.ID()
+
+	r := StatsReport{}
+	got, ok := r.GetConnectionStats(conn)
+
+	assert.False(t, ok)
+	assert.Equal(t, PeerConnectionStats{}, got)
+}
+
+func TestStatsReport_GetConnectionStats_WrongType(t *testing.T) {
+	conn := &PeerConnection{}
+	id := conn.ID()
+
+	r := StatsReport{
+		id: DataChannelStats{ID: "not-a-pc-stats"},
+	}
+
+	got, ok := r.GetConnectionStats(conn)
+
+	assert.False(t, ok)
+	assert.Equal(t, PeerConnectionStats{}, got)
+}
+
+func TestStatsReport_GetConnectionStats_Success(t *testing.T) {
+	conn := &PeerConnection{}
+	id := conn.ID()
+
+	want := PeerConnectionStats{
+		ID:        id,
+		Type:      StatsTypePeerConnection,
+		Timestamp: 1234,
+	}
+
+	r := StatsReport{
+		id: want,
+	}
+
+	got, ok := r.GetConnectionStats(conn)
+
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+func TestStatsReport_GetDataChannelStats_MissingEntry(t *testing.T) {
+	dc := &DataChannel{}
+	dc.getStatsID()
+
+	r := StatsReport{} // empty -> triggers first `if !ok`
+	got, ok := r.GetDataChannelStats(dc)
+
+	assert.False(t, ok)
+	assert.Equal(t, DataChannelStats{}, got)
+}
+
+func TestStatsReport_GetDataChannelStats_WrongType(t *testing.T) {
+	dc := &DataChannel{}
+	id := dc.getStatsID()
+
+	// Put a different Stats type under the correct key to fail type assertion
+	r := StatsReport{
+		id: PeerConnectionStats{ID: "not-a-dc-stats"},
+	}
+
+	got, ok := r.GetDataChannelStats(dc)
+
+	assert.False(t, ok)                      // triggers second `if !ok` (type assertion fails)
+	assert.Equal(t, DataChannelStats{}, got) // zero value on failure
+}
+
+func TestStatsReport_GetDataChannelStats_Success(t *testing.T) {
+	dc := &DataChannel{}
+	id := dc.getStatsID()
+
+	want := DataChannelStats{
+		ID:                    id,
+		Type:                  StatsTypeDataChannel,
+		Timestamp:             1234,
+		Label:                 "chat",
+		Protocol:              "json",
+		DataChannelIdentifier: 7,
+		TransportID:           "T1",
+		State:                 DataChannelStateOpen,
+		MessagesSent:          10,
+		BytesSent:             100,
+		MessagesReceived:      12,
+		BytesReceived:         120,
+	}
+
+	r := StatsReport{
+		id: want,
+	}
+
+	got, ok := r.GetDataChannelStats(dc)
+
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+func TestStatsReport_GetICECandidateStats_MissingEntry(t *testing.T) {
+	c := &ICECandidate{statsID: "C1"}
+	r := StatsReport{}
+
+	got, ok := r.GetICECandidateStats(c)
+
+	assert.False(t, ok)
+	assert.Equal(t, ICECandidateStats{}, got)
+}
+
+func TestStatsReport_GetICECandidateStats_WrongType(t *testing.T) {
+	c := &ICECandidate{statsID: "C2"}
+
+	r := StatsReport{
+		"C2": PeerConnectionStats{ID: "not-candidate"},
+	}
+
+	got, ok := r.GetICECandidateStats(c)
+
+	assert.False(t, ok)
+	assert.Equal(t, ICECandidateStats{}, got)
+}
+
+func TestStatsReport_GetICECandidateStats_Success(t *testing.T) {
+	statsID := "C3"
+	c := &ICECandidate{statsID: statsID}
+
+	want := ICECandidateStats{
+		ID:   statsID,
+		Type: StatsTypeLocalCandidate,
+	}
+
+	r := StatsReport{
+		statsID: want,
+	}
+
+	got, ok := r.GetICECandidateStats(c)
+
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+func TestStatsReport_GetICECandidatePairStats_MissingEntry(t *testing.T) {
+	pair := &ICECandidatePair{statsID: "CP1"}
+	r := StatsReport{}
+
+	got, ok := r.GetICECandidatePairStats(pair)
+
+	assert.False(t, ok)
+	assert.Equal(t, ICECandidatePairStats{}, got)
+}
+
+func TestStatsReport_GetICECandidatePairStats_WrongType(t *testing.T) {
+	pair := &ICECandidatePair{statsID: "CP2"}
+
+	r := StatsReport{
+		"CP2": PeerConnectionStats{ID: "not-candidate-pair"},
+	}
+
+	got, ok := r.GetICECandidatePairStats(pair)
+
+	assert.False(t, ok)
+	assert.Equal(t, ICECandidatePairStats{}, got)
+}
+
+func TestStatsReport_GetICECandidatePairStats_Success(t *testing.T) {
+	statsID := "CP3"
+	pair := &ICECandidatePair{statsID: statsID}
+
+	want := ICECandidatePairStats{
+		ID:   statsID,
+		Type: StatsTypeCandidatePair,
+	}
+
+	r := StatsReport{
+		statsID: want,
+	}
+
+	got, ok := r.GetICECandidatePairStats(pair)
+
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+func TestStatsReport_GetCertificateStats_MissingEntry(t *testing.T) {
+	cert := &Certificate{statsID: "CERT1"}
+	r := StatsReport{}
+
+	got, ok := r.GetCertificateStats(cert)
+
+	assert.False(t, ok)
+	assert.Equal(t, CertificateStats{}, got)
+}
+
+func TestStatsReport_GetCertificateStats_WrongType(t *testing.T) {
+	cert := &Certificate{statsID: "CERT2"}
+
+	r := StatsReport{
+		"CERT2": PeerConnectionStats{ID: "not-certificate"},
+	}
+
+	got, ok := r.GetCertificateStats(cert)
+
+	assert.False(t, ok)
+	assert.Equal(t, CertificateStats{}, got)
+}
+
+func TestStatsReport_GetCertificateStats_Success(t *testing.T) {
+	statsID := "CERT3"
+	cert := &Certificate{statsID: statsID}
+
+	want := CertificateStats{
+		ID:   statsID,
+		Type: StatsTypeCertificate,
+	}
+
+	r := StatsReport{
+		statsID: want,
+	}
+
+	got, ok := r.GetCertificateStats(cert)
+
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+func TestStatsReport_GetCodecStats_MissingEntry(t *testing.T) {
+	codec := &RTPCodecParameters{statsID: "CODEC1"}
+	r := StatsReport{}
+
+	got, ok := r.GetCodecStats(codec)
+
+	assert.False(t, ok)
+	assert.Equal(t, CodecStats{}, got)
+}
+
+func TestStatsReport_GetCodecStats_WrongType(t *testing.T) {
+	codec := &RTPCodecParameters{statsID: "CODEC2"}
+
+	r := StatsReport{
+		"CODEC2": PeerConnectionStats{ID: "not-codec"},
+	}
+
+	got, ok := r.GetCodecStats(codec)
+
+	assert.False(t, ok)
+	assert.Equal(t, CodecStats{}, got)
+}
+
+func TestStatsReport_GetCodecStats_Success(t *testing.T) {
+	statsID := "CODEC3"
+	codec := &RTPCodecParameters{statsID: statsID}
+
+	want := CodecStats{
+		ID:   statsID,
+		Type: StatsTypeCodec,
+	}
+
+	r := StatsReport{
+		statsID: want,
+	}
+
+	got, ok := r.GetCodecStats(codec)
+
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+func TestDefaultAudioPlayoutStatsProvider_AccumulateSnapshot(t *testing.T) {
+	provider := NewAudioPlayoutStatsProvider("media-playout-1001")
+
+	sampleRate := uint32(48000)
+	now := time.Unix(1710000000, 500*int64(time.Millisecond))
+	samplesPerBatch := 960 * 2
+	batches := []struct {
+		delay       time.Duration
+		synthesized bool
+	}{
+		{20 * time.Millisecond, true},
+		{25 * time.Millisecond, true},
+		{25 * time.Millisecond, false},
+	}
+
+	for _, batch := range batches {
+		provider.Accumulate(samplesPerBatch, sampleRate, batch.delay, batch.synthesized)
+	}
+
+	stats, ok := provider.Snapshot(now)
+	require.True(t, ok)
+
+	assert.Equal(t, StatsTypeMediaPlayout, stats.Type)
+	assert.Equal(t, "media-playout-1001", stats.ID)
+	assert.Equal(t, string(MediaKindAudio), stats.Kind)
+	assert.Equal(t, statsTimestampFrom(now), stats.Timestamp)
+
+	samplesPerBatchU64 := uint64(samplesPerBatch) //#nosec G115 -- samplesPerBatch is a small test value
+	expectedSamples := samplesPerBatchU64 * uint64(len(batches))
+	assert.Equal(t, expectedSamples, stats.TotalSamplesCount)
+
+	expectedDuration := float64(expectedSamples) / float64(sampleRate)
+	assert.Equal(t, expectedDuration, stats.TotalSamplesDuration)
+
+	synthesizedDuration := float64(samplesPerBatch*2) / float64(sampleRate)
+	assert.Equal(t, synthesizedDuration, stats.SynthesizedSamplesDuration)
+	assert.EqualValues(t, 1, stats.SynthesizedSamplesEvents)
+
+	totalDelay := 0.0
+	for _, batch := range batches {
+		totalDelay += batch.delay.Seconds() * float64(samplesPerBatch)
+	}
+	assert.Equal(t, totalDelay, stats.TotalPlayoutDelay)
+}
+
+func TestDefaultAudioPlayoutStatsProvider_AddRemoveTrack(t *testing.T) {
+	receiver := &RTPReceiver{closedChan: make(chan any)}
+	track := newTrackRemote(RTPCodecTypeAudio, 1234, 0, "", receiver)
+	samplesPerBatch := 960
+
+	provider := NewAudioPlayoutStatsProvider("media-playout-device-1")
+
+	err := provider.AddTrack(track)
+	require.NoError(t, err)
+	defer provider.RemoveTrack(track)
+
+	provider.Accumulate(samplesPerBatch, 48000, 10*time.Millisecond, false)
+	stats := track.pullAudioPlayoutStats(time.Now())
+	require.Len(t, stats, 1)
+	assert.Equal(t, "media-playout-device-1", stats[0].ID)
+	assert.EqualValues(t, samplesPerBatch, stats[0].TotalSamplesCount)
+
+	provider.RemoveTrack(track)
+	stats = track.pullAudioPlayoutStats(time.Now())
+	require.Empty(t, stats)
+}
+
+func TestDefaultAudioPlayoutStatsProvider_MultipleProviders(t *testing.T) {
+	receiver := &RTPReceiver{closedChan: make(chan any)}
+	track := newTrackRemote(RTPCodecTypeAudio, 5555, 0, "", receiver)
+	samplesPerBatch := 960
+
+	provider1 := NewAudioPlayoutStatsProvider("media-playout-speaker")
+	provider2 := NewAudioPlayoutStatsProvider("media-playout-headphones")
+
+	err := provider1.AddTrack(track)
+	require.NoError(t, err)
+	defer provider1.RemoveTrack(track)
+
+	err = provider2.AddTrack(track)
+	require.NoError(t, err)
+	defer provider2.RemoveTrack(track)
+
+	provider1.Accumulate(samplesPerBatch, 48000, 10*time.Millisecond, false)
+	provider2.Accumulate(samplesPerBatch*2, 48000, 15*time.Millisecond, false)
+
+	stats := track.pullAudioPlayoutStats(time.Now())
+	require.Len(t, stats, 2)
+
+	ids := []string{stats[0].ID, stats[1].ID}
+	assert.Contains(t, ids, "media-playout-speaker")
+	assert.Contains(t, ids, "media-playout-headphones")
 }

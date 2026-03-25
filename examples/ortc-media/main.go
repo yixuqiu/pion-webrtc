@@ -1,22 +1,26 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 // ortc demonstrates Pion WebRTC's ORTC capabilities.
 package main
 
 import (
+	"bufio"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pion/webrtc/v4"
-	"github.com/pion/webrtc/v4/examples/internal/signal"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/ivfreader"
 )
@@ -25,6 +29,7 @@ const (
 	videoFileName = "output.ivf"
 )
 
+// nolint:cyclop
 func main() {
 	isOffer := flag.Bool("offer", false, "Act as the offerer if set")
 	port := flag.Int("port", 8080, "http server port")
@@ -40,13 +45,13 @@ func main() {
 	}
 
 	// Use default Codecs
-	m := &webrtc.MediaEngine{}
-	if err := m.RegisterDefaultCodecs(); err != nil {
+	mediaEngine := &webrtc.MediaEngine{}
+	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
 		panic(err)
 	}
 
 	// Create an API object
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(m))
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
 
 	// Create the ICE gatherer
 	gatherer, err := api.NewICEGatherer(iceOptions)
@@ -69,7 +74,7 @@ func main() {
 		rtpSendParameters webrtc.RTPSendParameters
 	)
 
-	if *isOffer {
+	if *isOffer { //nolint:nestif
 		// Open the video file
 		file, fileErr := os.Open(videoFileName)
 		if fileErr != nil {
@@ -104,8 +109,8 @@ func main() {
 	}
 
 	gatherFinished := make(chan struct{})
-	gatherer.OnLocalCandidate(func(i *webrtc.ICECandidate) {
-		if i == nil {
+	gatherer.OnLocalCandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate == nil {
 			close(gatherFinished)
 		}
 	})
@@ -132,7 +137,7 @@ func main() {
 		panic(err)
 	}
 
-	s := Signal{
+	signal := Signal{
 		ICECandidates:     iceCandidates,
 		ICEParameters:     iceParams,
 		DTLSParameters:    dtlsParams,
@@ -142,16 +147,16 @@ func main() {
 	iceRole := webrtc.ICERoleControlled
 
 	// Exchange the information
-	fmt.Println(signal.Encode(s))
+	fmt.Println(encode(&signal))
 	remoteSignal := Signal{}
 
 	if *isOffer {
-		signalingChan := signal.HTTPSDPServer(*port)
-		signal.Decode(<-signalingChan, &remoteSignal)
+		signalingChan := httpSDPServer(*port)
+		decode(<-signalingChan, &remoteSignal)
 
 		iceRole = webrtc.ICERoleControlling
 	} else {
-		signal.Decode(signal.MustReadStdin(), &remoteSignal)
+		decode(readUntilNewline(), &remoteSignal)
 	}
 
 	if err = ice.SetRemoteCandidates(remoteSignal.ICECandidates); err != nil {
@@ -191,7 +196,7 @@ func main() {
 	select {}
 }
 
-// Given a FourCC value return a Track
+// Given a FourCC value return a Track.
 func fourCCToTrack(fourCC string) *webrtc.TrackLocalStaticSample {
 	// Determine video codec
 	var trackCodec string
@@ -215,14 +220,17 @@ func fourCCToTrack(fourCC string) *webrtc.TrackLocalStaticSample {
 	return trackLocal
 }
 
-// Write a file to Track
+// Write a file to Track.
 func writeFileToTrack(ivf *ivfreader.IVFReader, header *ivfreader.IVFFileHeader, track *webrtc.TrackLocalStaticSample) {
-	ticker := time.NewTicker(time.Millisecond * time.Duration((float32(header.TimebaseNumerator)/float32(header.TimebaseDenominator))*1000))
+	ticker := time.NewTicker(
+		time.Millisecond * time.Duration((float32(header.TimebaseNumerator)/float32(header.TimebaseDenominator))*1000),
+	)
+	defer ticker.Stop()
 	for ; true; <-ticker.C {
 		frame, _, err := ivf.ParseNextFrame()
 		if errors.Is(err, io.EOF) {
 			fmt.Printf("All video frames parsed and sent")
-			os.Exit(0)
+			os.Exit(0) //nolint: gocritic
 		}
 
 		if err != nil {
@@ -243,4 +251,64 @@ type Signal struct {
 	ICEParameters     webrtc.ICEParameters     `json:"iceParameters"`
 	DTLSParameters    webrtc.DTLSParameters    `json:"dtlsParameters"`
 	RTPSendParameters webrtc.RTPSendParameters `json:"rtpSendParameters"`
+}
+
+// Read from stdin until we get a newline.
+func readUntilNewline() (in string) {
+	var err error
+
+	r := bufio.NewReader(os.Stdin)
+	for {
+		in, err = r.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			panic(err)
+		}
+
+		if in = strings.TrimSpace(in); len(in) > 0 {
+			break
+		}
+	}
+
+	fmt.Println("")
+
+	return
+}
+
+// JSON encode + base64 a SessionDescription.
+func encode(obj *Signal) string {
+	b, err := json.Marshal(obj)
+	if err != nil {
+		panic(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// Decode a base64 and unmarshal JSON into a SessionDescription.
+func decode(in string, obj *Signal) {
+	b, err := base64.StdEncoding.DecodeString(in)
+	if err != nil {
+		panic(err)
+	}
+
+	if err = json.Unmarshal(b, obj); err != nil {
+		panic(err)
+	}
+}
+
+// httpSDPServer starts a HTTP Server that consumes SDPs.
+func httpSDPServer(port int) chan string {
+	sdpChan := make(chan string)
+	http.HandleFunc("/", func(res http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		fmt.Fprintf(res, "done") //nolint: errcheck
+		sdpChan <- string(body)
+	})
+
+	go func() {
+		// nolint: gosec
+		panic(http.ListenAndServe(":"+strconv.Itoa(port), nil))
+	}()
+
+	return sdpChan
 }

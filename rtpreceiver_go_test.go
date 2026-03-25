@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -17,7 +17,7 @@ import (
 )
 
 func TestSetRTPParameters(t *testing.T) {
-	sender, receiver, wan := createVNetPair(t)
+	sender, receiver, wan := createVNetPair(t, nil)
 
 	outgoingTrack, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeVP8}, "video", "pion")
 	assert.NoError(t, err)
@@ -27,34 +27,38 @@ func TestSetRTPParameters(t *testing.T) {
 
 	// Those parameters wouldn't make sense in a real application,
 	// but for the sake of the test we just need different values.
-	p := RTPParameters{
+	params := RTPParameters{
 		Codecs: []RTPCodecParameters{
 			{
-				RTPCodecCapability: RTPCodecCapability{MimeTypeOpus, 48000, 2, "minptime=10;useinbandfec=1", []RTCPFeedback{{"nack", ""}}},
-				PayloadType:        111,
+				RTPCodecCapability: RTPCodecCapability{
+					MimeTypeOpus, 48000, 2,
+					"minptime=10;useinbandfec=1",
+					[]RTCPFeedback{{"nack", ""}},
+				},
+				PayloadType: 111,
 			},
 		},
 		HeaderExtensions: []RTPHeaderExtensionParameter{
 			{URI: sdp.SDESMidURI},
 			{URI: sdp.SDESRTPStreamIDURI},
-			{URI: sdesRepairRTPStreamIDURI},
+			{URI: sdp.SDESRepairRTPStreamIDURI},
 		},
 	}
 
 	seenPacket, seenPacketCancel := context.WithCancel(context.Background())
 	receiver.OnTrack(func(_ *TrackRemote, r *RTPReceiver) {
-		r.SetRTPParameters(p)
+		r.SetRTPParameters(params)
 
 		incomingTrackCodecs := r.Track().Codec()
 
-		assert.EqualValues(t, p.HeaderExtensions, r.Track().params.HeaderExtensions)
+		assert.EqualValues(t, params.HeaderExtensions, r.Track().params.HeaderExtensions)
 
-		assert.EqualValues(t, p.Codecs[0].MimeType, incomingTrackCodecs.MimeType)
-		assert.EqualValues(t, p.Codecs[0].ClockRate, incomingTrackCodecs.ClockRate)
-		assert.EqualValues(t, p.Codecs[0].Channels, incomingTrackCodecs.Channels)
-		assert.EqualValues(t, p.Codecs[0].SDPFmtpLine, incomingTrackCodecs.SDPFmtpLine)
-		assert.EqualValues(t, p.Codecs[0].RTCPFeedback, incomingTrackCodecs.RTCPFeedback)
-		assert.EqualValues(t, p.Codecs[0].PayloadType, incomingTrackCodecs.PayloadType)
+		assert.EqualValues(t, params.Codecs[0].MimeType, incomingTrackCodecs.MimeType)
+		assert.EqualValues(t, params.Codecs[0].ClockRate, incomingTrackCodecs.ClockRate)
+		assert.EqualValues(t, params.Codecs[0].Channels, incomingTrackCodecs.Channels)
+		assert.EqualValues(t, params.Codecs[0].SDPFmtpLine, incomingTrackCodecs.SDPFmtpLine)
+		assert.EqualValues(t, params.Codecs[0].RTCPFeedback, incomingTrackCodecs.RTCPFeedback)
+		assert.EqualValues(t, params.Codecs[0].PayloadType, incomingTrackCodecs.PayloadType)
 
 		seenPacketCancel()
 	})
@@ -69,4 +73,39 @@ func TestSetRTPParameters(t *testing.T) {
 	<-seenPacket.Done()
 	assert.NoError(t, wan.Stop())
 	closePairNow(t, sender, receiver)
+}
+
+func TestReceiveError(t *testing.T) {
+	api := NewAPI()
+
+	dtlsTransport, err := api.NewDTLSTransport(nil, nil)
+	assert.NoError(t, err)
+
+	rtpReceiver, err := api.NewRTPReceiver(RTPCodecTypeVideo, dtlsTransport)
+	assert.NoError(t, err)
+
+	rtpParameters := RTPReceiveParameters{
+		Encodings: []RTPDecodingParameters{
+			{
+				RTPCodingParameters: RTPCodingParameters{
+					SSRC: 1000,
+				},
+			},
+		},
+	}
+
+	assert.Error(t, rtpReceiver.Receive(rtpParameters))
+
+	chanErrs := make(chan error)
+	go func() {
+		_, _, chanErr := rtpReceiver.Read(nil)
+		chanErrs <- chanErr
+
+		_, _, chanErr = rtpReceiver.Track().ReadRTP()
+		chanErrs <- chanErr
+	}()
+
+	assert.NoError(t, rtpReceiver.Stop())
+	assert.Error(t, io.ErrClosedPipe, <-chanErrs)
+	assert.Error(t, io.ErrClosedPipe, <-chanErrs)
 }

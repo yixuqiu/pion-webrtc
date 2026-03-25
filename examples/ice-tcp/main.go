@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 // ice-tcp demonstrates Pion WebRTC's ICE TCP abilities.
 package main
@@ -21,7 +20,7 @@ import (
 
 var api *webrtc.API //nolint
 
-func doSignaling(w http.ResponseWriter, r *http.Request) {
+func doSignaling(res http.ResponseWriter, req *http.Request) { //nolint:cyclop
 	peerConnection, err := api.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		panic(err)
@@ -38,7 +37,7 @@ func doSignaling(w http.ResponseWriter, r *http.Request) {
 		d.OnOpen(func() {
 			for range time.Tick(time.Second * 3) {
 				if err = d.SendText(time.Now().String()); err != nil {
-					if errors.Is(io.ErrClosedPipe, err) {
+					if errors.Is(err, io.ErrClosedPipe) {
 						return
 					}
 					panic(err)
@@ -48,7 +47,7 @@ func doSignaling(w http.ResponseWriter, r *http.Request) {
 	})
 
 	var offer webrtc.SessionDescription
-	if err = json.NewDecoder(r.Body).Decode(&offer); err != nil {
+	if err = json.NewDecoder(req.Body).Decode(&offer); err != nil {
 		panic(err)
 	}
 
@@ -76,12 +75,13 @@ func doSignaling(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write(response); err != nil {
+	res.Header().Set("Content-Type", "application/json")
+	if _, err := res.Write(response); err != nil {
 		panic(err)
 	}
 }
 
+//nolint:cyclop
 func main() {
 	settingEngine := webrtc.SettingEngine{}
 
